@@ -1,0 +1,14 @@
+{
+  "name": "jobflow",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "app/desktop"
+  ],
+  "scripts": {
+    "desktop:dev": "npm --workspace app/desktop run dev",
+    "desktop:build": "npm --workspace app/desktop run build",
+    "desktop:tauri": "npm --workspace app/desktop run tauri",
+    "backend:test": "cd app/backend && uv run pytest"
+  }
+}
