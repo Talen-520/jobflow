@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from app.models.schemas import (
     BlockedItem,
@@ -27,6 +28,8 @@ SENSITIVE_TERMS = [
     "authorized",
     "salary",
     "compensation",
+    "relocation",
+    "relocate",
     "birth",
     "ssn",
 ]
@@ -52,15 +55,22 @@ class FillPlanService:
         label = self._field_text(field)
         if self._is_eeo(label) and not preferences.fill_eeo_fields:
             return BlockedItem(field_id=field.field_id, reason="EEO field disabled")
-        if self._is_sensitive(label) and not preferences.fill_sensitive_fields:
+        preference_item = self._map_preference_policy_field(
+            field, tools, preferences, label
+        )
+        if preference_item:
+            return preference_item
+        if field.sensitive or self._is_sensitive(label):
             sensitive_item = self._map_sensitive_field(field, tools, label)
             if sensitive_item:
-                sensitive_item.needs_review = True
+                if not preferences.fill_sensitive_fields:
+                    sensitive_item.needs_review = True
                 return sensitive_item
-            return BlockedItem(
-                field_id=field.field_id,
-                reason="Sensitive field requires user confirmation",
-            )
+            if not preferences.fill_sensitive_fields:
+                return BlockedItem(
+                    field_id=field.field_id,
+                    reason="Sensitive field requires user confirmation",
+                )
 
         direct = self._direct_profile_mapping(label, tools)
         if direct:
@@ -70,22 +80,11 @@ class FillPlanService:
             return self._map_document(field, tools.profile)
 
         if field.type == FieldType.textarea or self._is_open_question(label):
-            return self._map_open_question(field, tools, label)
+            return self._map_open_question(field, tools, preferences, label)
 
         if field.required:
-            return BlockedItem(
-                field_id=field.field_id,
-                reason="Required field has no matching user-provided fact",
-            )
-        return FillPlanItem(
-            field_id=field.field_id,
-            action="skip",
-            value="",
-            selector=field.selector,
-            confidence=0.4,
-            needs_review=True,
-            reason="Optional field without a confident source.",
-        )
+            return self._missing_fact_item(field, preferences)
+        return self._optional_missing_fact_item(field, preferences)
 
     def _direct_profile_mapping(
         self, label: str, tools: ProfileTools
@@ -131,24 +130,105 @@ class FillPlanService:
                 return self._item(field, result, "Sensitive work authorization fact.")
         return None
 
-    def _map_document(self, field: FormField, profile: UserProfile) -> FillPlanItem | BlockedItem:
+    def _map_preference_policy_field(
+        self,
+        field: FormField,
+        tools: ProfileTools,
+        preferences: Preferences,
+        label: str,
+    ) -> FillPlanItem | BlockedItem | None:
+        if self._is_salary(label):
+            return self._map_policy_value(
+                field=field,
+                tools=tools,
+                policy=preferences.salary_answer_policy,
+                profile_paths=[
+                    "preferences.salary",
+                    "preferences.desired_salary",
+                    "preferences.compensation",
+                ],
+                missing_reason=(
+                    "Salary policy is use_profile, but no saved salary fact exists"
+                ),
+                blank_reason="Salary field left blank by salary policy.",
+                source_reason="Salary fact from profile preferences.",
+                review_required=not preferences.fill_sensitive_fields,
+            )
+        if self._is_relocation(label):
+            return self._map_policy_value(
+                field=field,
+                tools=tools,
+                policy=preferences.relocation_policy,
+                profile_paths=[
+                    "preferences.relocation",
+                    "preferences.relocation_answer",
+                ],
+                missing_reason=(
+                    "Relocation policy is use_profile, but no saved relocation fact exists"
+                ),
+                blank_reason="Relocation field left blank by relocation policy.",
+                source_reason="Relocation fact from profile preferences.",
+                review_required=not preferences.fill_sensitive_fields,
+            )
+        return None
+
+    def _map_policy_value(
+        self,
+        field: FormField,
+        tools: ProfileTools,
+        policy: str,
+        profile_paths: list[str],
+        missing_reason: str,
+        blank_reason: str,
+        source_reason: str,
+        review_required: bool,
+    ) -> FillPlanItem | BlockedItem | None:
+        if policy == "leave_blank":
+            return self._blank_item(field, blank_reason)
+        if policy != "use_profile":
+            return None
+        for path in profile_paths:
+            result = tools.get_profile_field(path)
+            if result:
+                item = self._item(field, result, source_reason)
+                if review_required:
+                    item.needs_review = True
+                return item
+        return BlockedItem(field_id=field.field_id, reason=missing_reason)
+
+    def _map_document(
+        self, field: FormField, profile: UserProfile
+    ) -> FillPlanItem | BlockedItem:
         label = self._field_text(field)
         preferred = "cover_letter" if "cover" in label else "resume"
         for document in profile.documents:
             if document.kind == preferred:
+                document_path = Path(document.path).expanduser()
+                if not document.path or not document_path.is_file():
+                    return BlockedItem(
+                        field_id=field.field_id,
+                        reason=f"{preferred} document file is missing from local storage",
+                    )
                 return FillPlanItem(
                     field_id=field.field_id,
                     action="upload",
-                    value=document.path,
+                    value=str(document_path.resolve()),
                     selector=field.selector,
                     confidence=0.9,
                     source_refs=[f"profile.documents.{document.id}"],
                     reason=f"Using {preferred} document from local vault.",
                 )
-        return BlockedItem(field_id=field.field_id, reason=f"Missing {preferred} document")
+        return BlockedItem(
+            field_id=field.field_id,
+            reason=f"Missing {preferred} document",
+        )
 
     def _map_open_question(
-        self, field: FormField, tools: ProfileTools, label: str
+        self,
+        field: FormField,
+        tools: ProfileTools,
+        preferences: Preferences,
+        label: str,
     ) -> FillPlanItem | BlockedItem:
         question_type = self._classify_open_question(label)
         keywords = [word for word in re.split(r"\W+", label) if len(word) > 3]
@@ -167,6 +247,14 @@ class FillPlanService:
             )
         facts = tools.search_profile_facts(label)
         if facts:
+            if preferences.low_confidence_policy == "leave_blank":
+                return self._blank_item(
+                    field,
+                    (
+                        "Open-ended field left blank because low-confidence "
+                        "policy is leave_blank."
+                    ),
+                )
             joined = " ".join(result.value for result in facts[:3])
             return FillPlanItem(
                 field_id=field.field_id,
@@ -178,6 +266,14 @@ class FillPlanService:
                 source_refs=[result.source_ref for result in facts[:3]],
                 reason="Drafted only from user-provided facts; review required.",
             )
+        if preferences.missing_fact_policy == "leave_blank":
+            return self._blank_item(
+                field,
+                (
+                    "Open-ended field left blank because no answer bank or "
+                    "profile fact matched."
+                ),
+            )
         return BlockedItem(
             field_id=field.field_id,
             reason="Open-ended question needs answer bank or profile facts",
@@ -187,16 +283,88 @@ class FillPlanService:
         action = "select" if field.type in {FieldType.select, FieldType.radio} else "fill"
         if field.type == FieldType.checkbox:
             action = "check"
+        value = self._field_value(field, result.value)
         return FillPlanItem(
             field_id=field.field_id,
             action=action,
-            value=result.value,
+            value=value,
             selector=field.selector,
             confidence=result.confidence,
             needs_review=result.confidence < 0.85,
             source_refs=[result.source_ref],
             reason=reason,
         )
+
+    def _missing_fact_item(
+        self, field: FormField, preferences: Preferences
+    ) -> FillPlanItem | BlockedItem:
+        if preferences.missing_fact_policy == "leave_blank":
+            return self._blank_item(
+                field,
+                "Required field left blank because missing-fact policy is leave_blank.",
+            )
+        return BlockedItem(
+            field_id=field.field_id,
+            reason="Required field has no matching user-provided fact",
+        )
+
+    def _optional_missing_fact_item(
+        self, field: FormField, preferences: Preferences
+    ) -> FillPlanItem:
+        if preferences.missing_fact_policy == "leave_blank":
+            return self._blank_item(
+                field,
+                "Optional field left blank because missing-fact policy is leave_blank.",
+            )
+        return FillPlanItem(
+            field_id=field.field_id,
+            action="skip",
+            value="",
+            selector=field.selector,
+            confidence=0.4,
+            needs_review=True,
+            reason="Optional field without a confident source.",
+        )
+
+    def _blank_item(self, field: FormField, reason: str) -> FillPlanItem:
+        return FillPlanItem(
+            field_id=field.field_id,
+            action="skip",
+            value="",
+            selector=field.selector,
+            confidence=1.0,
+            needs_review=False,
+            reason=reason,
+        )
+
+    def _field_value(self, field: FormField, value: str) -> str | bool:
+        if field.type in {FieldType.select, FieldType.radio}:
+            bool_value = self._parse_bool(value)
+            if bool_value is not None:
+                option = self._bool_option(field.options, bool_value)
+                if option is not None:
+                    return option
+        if field.type == FieldType.checkbox:
+            bool_value = self._parse_bool(value)
+            if bool_value is not None:
+                return bool_value
+        return value
+
+    def _parse_bool(self, value: str) -> bool | None:
+        normalized = str(value).strip().lower()
+        if normalized in {"true", "yes", "y", "1"}:
+            return True
+        if normalized in {"false", "no", "n", "0"}:
+            return False
+        return None
+
+    def _bool_option(self, options: list[str], value: bool) -> str | None:
+        preferred = ["yes", "true", "1"] if value else ["no", "false", "0"]
+        for preferred_option in preferred:
+            for option in options:
+                if option.strip().lower() == preferred_option:
+                    return option
+        return None
 
     def _field_text(self, field: FormField) -> str:
         return " ".join(
@@ -206,8 +374,17 @@ class FillPlanService:
     def _is_sensitive(self, text: str) -> bool:
         return any(term in text for term in SENSITIVE_TERMS)
 
+    def _is_salary(self, text: str) -> bool:
+        return any(term in text for term in ["salary", "compensation"])
+
+    def _is_relocation(self, text: str) -> bool:
+        return any(term in text for term in ["relocation", "relocate"])
+
     def _is_eeo(self, text: str) -> bool:
-        return any(term in text for term in ["gender", "race", "ethnicity", "veteran", "disability"])
+        return any(
+            term in text
+            for term in ["gender", "race", "ethnicity", "veteran", "disability"]
+        )
 
     def _is_open_question(self, text: str) -> bool:
         return any(

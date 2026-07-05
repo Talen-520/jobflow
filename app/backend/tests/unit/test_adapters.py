@@ -71,6 +71,41 @@ def test_registry_selects_lever_and_fill_plan_handles_full_name() -> None:
     asyncio.run(run())
 
 
+def test_registry_selects_ashby_workday_and_oracle() -> None:
+    async def run() -> None:
+        cases = [
+            (
+                "ashby",
+                "https://jobs.ashbyhq.com/example/123/application",
+                "tests/fixtures/ashby_application.html",
+                {"firstName", "lastName", "email", "resume"},
+            ),
+            (
+                "workday",
+                "https://example.wd1.myworkdayjobs.com/External/job/123",
+                "tests/fixtures/workday_application.html",
+                {"name", "email", "phone", "sponsorship"},
+            ),
+            (
+                "oracle",
+                "https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience",
+                "tests/fixtures/oracle_application.html",
+                {"name", "email", "linkedin", "resume"},
+            ),
+        ]
+        for ats, url, fixture, expected_ids in cases:
+            html = Path(fixture).read_text()
+            page = FakePage(url, html)
+            adapter = await AdapterRegistry().select_for_page(page)
+            form = await adapter.extract_form(page)
+
+            assert adapter.name == ats
+            assert form.ats == ats
+            assert {field.field_id for field in form.fields} >= expected_ids
+
+    asyncio.run(run())
+
+
 def test_adapter_success_detection() -> None:
     async def run() -> None:
         page = FakePage(

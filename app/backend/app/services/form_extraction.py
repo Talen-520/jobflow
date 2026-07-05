@@ -128,6 +128,10 @@ class FormExtractionService:
             return "lever"
         if "ashby" in haystack:
             return "ashby"
+        if "myworkdayjobs.com" in haystack or "workday" in haystack:
+            return "workday"
+        if "oraclecloud.com" in haystack or "taleo.net" in haystack or "oracle recruiting" in haystack:
+            return "oracle"
         return "generic"
 
     def _looks_sensitive(self, label: str) -> bool:

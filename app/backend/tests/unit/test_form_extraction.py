@@ -13,4 +13,7 @@ def test_extracts_generic_application_fixture() -> None:
     assert len(form.fields) == 7
     assert form.fields[0].label == "First name"
     assert form.fields[2].type == "email"
+    resume = next(field for field in form.fields if field.field_id == "resume")
+    assert resume.type == "file"
+    assert resume.selector == "#resume"
     assert form.fields[-1].sensitive is True

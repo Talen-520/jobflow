@@ -109,6 +109,25 @@ export type FillPlan = {
   blocked_items: Array<{ field_id: string; reason: string }>;
 };
 
+export type FillPlanReviewDecision = "accept" | "edit" | "leave_blank";
+
+export type FillPlanReviewResult = {
+  status: "updated";
+  field_id: string;
+  decision: FillPlanReviewDecision;
+  updated_plan: FillPlan;
+  message: string;
+};
+
+export type ChatAdjustResult = {
+  status: "parsed";
+  field_id: string | null;
+  command: "review" | "leave_blank" | "shorten" | "use_fact";
+  message: string;
+  updated_plan: FillPlan | null;
+  source_refs: string[];
+};
+
 export type FillResult = {
   status: "applied" | "dry_run" | "blocked" | "error";
   filled_count: number;
@@ -126,6 +145,15 @@ export type BrowserState = {
   status: "started" | "stopped" | "not_started" | "opened" | "error";
   url: string;
   message: string;
+};
+
+export type AutomationEvent = {
+  id: string;
+  event_type: string;
+  status: "info" | "running" | "success" | "warning" | "error";
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
 };
 
 export type ApplicationRecord = {
@@ -177,6 +205,22 @@ export type OpenAnswerDraftRequest = {
   keywords?: string[];
   max_words?: number;
   use_model?: boolean;
+};
+
+export type PromptContextSource = {
+  source_ref: string;
+  category: string;
+  label: string;
+  value: string;
+  sensitive: boolean;
+};
+
+export type PromptContextPreview = {
+  source_count: number;
+  system_rules: string[];
+  preference_summary: string[];
+  sources: PromptContextSource[];
+  generated_prompt: string;
 };
 
 export type DataExport = {
@@ -233,6 +277,21 @@ export async function getHealth(signal?: AbortSignal): Promise<Health> {
     throw new Error(`Backend health failed: ${response.status}`);
   }
   return response.json() as Promise<Health>;
+}
+
+export function getEventsUrl(): string {
+  const url = new URL(API_BASE);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/events";
+  url.search = "";
+  return url.toString();
+}
+
+export function getDemoApplicationUrl(): string {
+  const url = new URL(API_BASE);
+  url.pathname = "/demo/application";
+  url.search = "";
+  return url.toString();
 }
 
 export async function getProfile(signal?: AbortSignal): Promise<Profile> {
@@ -299,6 +358,32 @@ export async function createApplication(
   return response.json() as Promise<ApplicationRecord>;
 }
 
+export async function getApplication(
+  recordId: string,
+  signal?: AbortSignal,
+): Promise<ApplicationRecord> {
+  const response = await fetch(`${API_BASE}/applications/${recordId}`, { signal });
+  if (!response.ok) {
+    throw new Error(`Application detail load failed: ${response.status}`);
+  }
+  return response.json() as Promise<ApplicationRecord>;
+}
+
+export async function patchApplication(
+  recordId: string,
+  patch: Partial<ApplicationRecord>,
+): Promise<ApplicationRecord> {
+  const response = await fetch(`${API_BASE}/applications/${recordId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw new Error(`Application update failed: ${response.status}`);
+  }
+  return response.json() as Promise<ApplicationRecord>;
+}
+
 export async function importDocument(request: {
   kind: "resume" | "cover_letter" | "other";
   name: string;
@@ -357,6 +442,26 @@ export async function stopBrowser(): Promise<BrowserState> {
   return response.json() as Promise<BrowserState>;
 }
 
+export async function pauseAutomation(): Promise<{ status: "paused" }> {
+  const response = await fetch(`${API_BASE}/automation/pause`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`Automation pause failed: ${response.status}`);
+  }
+  return response.json() as Promise<{ status: "paused" }>;
+}
+
+export async function resumeAutomation(): Promise<{ status: "resumed" }> {
+  const response = await fetch(`${API_BASE}/automation/resume`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`Automation resume failed: ${response.status}`);
+  }
+  return response.json() as Promise<{ status: "resumed" }>;
+}
+
 export async function inspectForm(): Promise<FormSchema> {
   const response = await fetch(`${API_BASE}/automation/inspect`, {
     method: "POST",
@@ -393,6 +498,50 @@ export async function draftOpenAnswer(
     throw new Error(`Open-answer draft failed: ${response.status}`);
   }
   return response.json() as Promise<OpenAnswerDraft>;
+}
+
+export async function getPromptContextPreview(
+  signal?: AbortSignal,
+): Promise<PromptContextPreview> {
+  const response = await fetch(`${API_BASE}/automation/context-preview`, { signal });
+  if (!response.ok) {
+    throw new Error(`Prompt context preview failed: ${response.status}`);
+  }
+  return response.json() as Promise<PromptContextPreview>;
+}
+
+export async function reviewFillPlanField(request: {
+  field_id: string;
+  decision: FillPlanReviewDecision;
+  current_plan: FillPlan;
+  form?: FormSchema | null;
+  value?: string | boolean | null;
+}): Promise<FillPlanReviewResult> {
+  const response = await fetch(`${API_BASE}/automation/review-field`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw new Error(`Fill-plan review failed: ${response.status}`);
+  }
+  return response.json() as Promise<FillPlanReviewResult>;
+}
+
+export async function chatAdjust(request: {
+  field_id?: string | null;
+  message: string;
+  current_plan?: FillPlan | null;
+}): Promise<ChatAdjustResult> {
+  const response = await fetch(`${API_BASE}/automation/chat-adjust`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw new Error(`Chat adjustment failed: ${response.status}`);
+  }
+  return response.json() as Promise<ChatAdjustResult>;
 }
 
 export async function applyFillPlan(

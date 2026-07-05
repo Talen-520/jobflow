@@ -64,6 +64,13 @@ def test_safe_fill_only_writes_eligible_items() -> None:
                 selector="#optional",
                 source_refs=[],
             ),
+            FillPlanItem(
+                field_id="resume",
+                action="upload",
+                value="/tmp/resume.pdf",
+                confidence=0.9,
+                source_refs=["profile.documents.doc_resume"],
+            ),
         ],
         blocked_items=[BlockedItem(field_id="sponsorship", reason="Sensitive field")],
     )
@@ -71,12 +78,13 @@ def test_safe_fill_only_writes_eligible_items() -> None:
         fields=[
             FormField(field_id="email", selector="#email"),
             FormField(field_id="motivation", selector="#motivation"),
+            FormField(field_id="resume", selector="#resume"),
         ]
     )
 
     result = asyncio.run(SafeFillExecutor().apply(page, plan, form))
 
     assert result.status == "applied"
-    assert result.filled_count == 1
+    assert result.filled_count == 2
     assert result.review_count == 2
-    assert page.writes == {"#email": "tao@example.com"}
+    assert page.writes == {"#email": "tao@example.com", "#resume": "/tmp/resume.pdf"}

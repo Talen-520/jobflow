@@ -176,6 +176,15 @@ class BrowserState(BaseModel):
     message: str = ""
 
 
+class AutomationEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("evt"))
+    event_type: str
+    status: Literal["info", "running", "success", "warning", "error"] = "info"
+    message: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class SuccessDetection(BaseModel):
     confidence: float = 0.0
     signals: list[str] = Field(default_factory=list)
@@ -231,6 +240,22 @@ class OpenAnswerDraft(BaseModel):
     reason: str = ""
 
 
+class PromptContextSource(BaseModel):
+    source_ref: str
+    category: str
+    label: str
+    value: str
+    sensitive: bool = False
+
+
+class PromptContextPreview(BaseModel):
+    source_count: int = 0
+    system_rules: list[str] = Field(default_factory=list)
+    preference_summary: list[str] = Field(default_factory=list)
+    sources: list[PromptContextSource] = Field(default_factory=list)
+    generated_prompt: str = ""
+
+
 class InspectRequest(BaseModel):
     url: str = ""
     html: str = ""
@@ -241,10 +266,35 @@ class FillPlanRequest(BaseModel):
     form: FormSchema
 
 
+class FillPlanReviewRequest(BaseModel):
+    field_id: str
+    decision: Literal["accept", "edit", "leave_blank"]
+    current_plan: FillPlan
+    form: FormSchema | None = None
+    value: str | bool | None = None
+
+
+class FillPlanReviewResult(BaseModel):
+    status: Literal["updated"] = "updated"
+    field_id: str
+    decision: Literal["accept", "edit", "leave_blank"]
+    updated_plan: FillPlan
+    message: str = ""
+
+
 class ChatAdjustRequest(BaseModel):
     field_id: str | None = None
     message: str
     current_plan: FillPlan | None = None
+
+
+class ChatAdjustResult(BaseModel):
+    status: Literal["parsed"]
+    field_id: str | None = None
+    command: Literal["review", "leave_blank", "shorten", "use_fact"] = "review"
+    message: str
+    updated_plan: FillPlan | None = None
+    source_refs: list[str] = Field(default_factory=list)
 
 
 class SuccessDetectionRequest(BaseModel):

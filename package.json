@@ -6,6 +6,9 @@
     "app/desktop"
   ],
   "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:tauri": "node scripts/dev.mjs --tauri",
+    "smoke": "node scripts/smoke.mjs",
     "desktop:dev": "npm --workspace app/desktop run dev",
     "desktop:build": "npm --workspace app/desktop run build",
     "desktop:tauri": "npm --workspace app/desktop run tauri",

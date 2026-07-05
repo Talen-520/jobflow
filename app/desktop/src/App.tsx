@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   BriefcaseBusiness,
   CheckCircle2,
   ClipboardList,
   Database,
-  ExternalLink,
   FileText,
   Home,
   Lock,
@@ -21,6 +20,7 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 
+import { FillPlanReviewControls } from "@/components/fill-plan-review-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,23 +41,40 @@ import {
   SettingsPage,
 } from "@/components/pages";
 import {
+  collapseToFloatingAssistant,
+  isDesktopRuntime,
+  showFloatingAssistant,
+} from "@/lib/desktop";
+import {
+  applicationSnapshotAnswerCount,
+  applicationSnapshotFromRecord,
+  buildApplicationAnswersSnapshot,
+  uploadedDocumentIdsFromPlan,
+} from "@/lib/fill-plan";
+import {
   API_BASE,
   applyFillPlan,
+  chatAdjust,
   createApplication,
   createFillPlan,
   detectSuccess,
+  getDemoApplicationUrl,
+  getEventsUrl,
   getHealth,
   inspectForm,
   listApplications,
   openBrowser,
+  patchApplication,
+  reviewFillPlanField,
   stopBrowser,
   type ApplicationRecord,
+  type AutomationEvent,
   type FillPlan,
+  type FillPlanReviewDecision,
   type FillResult,
   type FormSchema,
   type SuccessDetectionResult,
 } from "@/lib/api";
-import { applicationRows, fillSections } from "@/lib/sample-data";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -88,6 +105,20 @@ const statusVariant = {
   Withdrawn: "danger",
   Draft: "outline",
   Archived: "outline",
+  Filled: "success",
+  "Needs Review": "warning",
+  Blocked: "danger",
+  Skipped: "outline",
+  Error: "danger",
+  Planned: "default",
+} as const;
+
+const eventVariant = {
+  info: "outline",
+  running: "default",
+  success: "success",
+  warning: "warning",
+  error: "danger",
 } as const;
 
 function App() {
@@ -98,13 +129,16 @@ function App() {
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">(
     "checking",
   );
-  const [targetUrl, setTargetUrl] = useState("https://boards.greenhouse.io/example");
+  const [targetUrl, setTargetUrl] = useState(getDemoApplicationUrl);
   const [automationMessage, setAutomationMessage] = useState("Ready to inspect this page.");
   const [formSchema, setFormSchema] = useState<FormSchema | null>(null);
   const [fillPlan, setFillPlan] = useState<FillPlan | null>(null);
   const [fillResult, setFillResult] = useState<FillResult | null>(null);
   const [successResult, setSuccessResult] = useState<SuccessDetectionResult | null>(null);
+  const [successDraft, setSuccessDraft] = useState<ApplicationRecord | null>(null);
   const [savedApplications, setSavedApplications] = useState<ApplicationRecord[]>([]);
+  const [eventLog, setEventLog] = useState<AutomationEvent[]>([]);
+  const desktopAvailable = isDesktopRuntime();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -125,10 +159,28 @@ function App() {
     return () => controller.abort();
   }, [backendStatus]);
 
-  const reviewedCount = useMemo(
-    () => fillSections.filter((section) => section.status === "Reviewed").length,
-    [],
-  );
+  useEffect(() => {
+    if (backendStatus !== "online") {
+      return;
+    }
+    const socket = new WebSocket(getEventsUrl());
+    socket.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data) as AutomationEvent;
+        setEventLog((current) => [event, ...current].slice(0, 8));
+        if (event.message) {
+          setAutomationMessage(event.message);
+        }
+      } catch {
+        setAutomationMessage("Received an unreadable automation event.");
+      }
+    };
+    socket.onerror = () => {
+      setAutomationMessage("Automation event stream disconnected.");
+    };
+    return () => socket.close();
+  }, [backendStatus]);
+
   const backendOnline = backendStatus === "online";
 
   const runAutomationStep = async (
@@ -156,6 +208,7 @@ function App() {
         setFillPlan(null);
         setFillResult(null);
         setSuccessResult(null);
+        setSuccessDraft(null);
         setAutomationMessage(state.status === "stopped" ? "Browser stopped." : state.message);
       }
       if (step === "inspect") {
@@ -165,6 +218,7 @@ function App() {
         setFillPlan(null);
         setFillResult(null);
         setSuccessResult(null);
+        setSuccessDraft(null);
         setAutomationMessage(
           `Found ${inspected.fields.length} fields on ${inspected.ats}.`,
         );
@@ -198,6 +252,7 @@ function App() {
         setAutomationMessage("Checking for a success page...");
         const result = await detectSuccess(formSchema ?? undefined);
         setSuccessResult(result);
+        setSuccessDraft(result.proposed_record);
         setAutomationMessage(
           result.detected
             ? `Success detected at ${Math.round(result.confidence * 100)}% confidence.`
@@ -205,20 +260,19 @@ function App() {
         );
       }
       if (step === "save") {
-        const proposal = successResult?.proposed_record;
+        const proposal = successDraft ?? successResult?.proposed_record;
         if (!proposal) {
           setAutomationMessage("No success record proposal is ready to save.");
           return;
         }
         const saved = await createApplication({
           ...proposal,
+          ...uploadedDocumentIdsFromPlan(fillPlan),
           status: "applied",
-          answers_snapshot: {
-            fill_result: fillResult,
-            fill_plan: fillPlan,
-          },
+          answers_snapshot: buildApplicationAnswersSnapshot(fillPlan, fillResult),
         });
         setSavedApplications((current) => [saved, ...current]);
+        setSelectedNav("Applications");
         setAutomationMessage(`Saved application record for ${saved.company_name}.`);
       }
     } catch (error) {
@@ -228,9 +282,96 @@ function App() {
     }
   };
 
+  const runChatAdjustment = async (message: string) => {
+    if (!backendOnline) {
+      setAutomationMessage("Backend is offline. Start the local API first.");
+      return;
+    }
+    if (!fillPlan) {
+      setAutomationMessage("Create a fill plan before adjusting fields.");
+      return;
+    }
+    try {
+      const result = await chatAdjust({
+        message,
+        current_plan: fillPlan,
+      });
+      if (result.updated_plan) {
+        setFillPlan(result.updated_plan);
+      }
+      setAutomationMessage(`Chat adjustment parsed as ${result.command}.`);
+    } catch (error) {
+      setAutomationMessage(error instanceof Error ? error.message : "Chat adjustment failed.");
+    }
+  };
+
+  const reviewCurrentField = async (
+    fieldId: string,
+    decision: FillPlanReviewDecision,
+    value?: string | boolean | null,
+  ) => {
+    if (!backendOnline) {
+      setAutomationMessage("Backend is offline. Start the local API first.");
+      return;
+    }
+    if (!fillPlan) {
+      setAutomationMessage("Create a fill plan before reviewing fields.");
+      return;
+    }
+    try {
+      const result = await reviewFillPlanField({
+        field_id: fieldId,
+        decision,
+        value,
+        current_plan: fillPlan,
+        form: formSchema,
+      });
+      setFillPlan(result.updated_plan);
+      setFillResult(null);
+      setAutomationMessage(result.message);
+    } catch (error) {
+      setAutomationMessage(error instanceof Error ? error.message : "Field review failed.");
+    }
+  };
+
+  const updateSavedApplication = (updated: ApplicationRecord) => {
+    setSavedApplications((current) =>
+      current.map((application) =>
+        application.id === updated.id ? updated : application,
+      ),
+    );
+  };
+
+  const openFloatingAssistant = async () => {
+    try {
+      const result = await showFloatingAssistant();
+      setAutomationMessage(result);
+    } catch (error) {
+      setAutomationMessage(
+        error instanceof Error ? error.message : "Unable to open floating assistant.",
+      );
+    }
+  };
+
+  const collapseMainWindow = async () => {
+    try {
+      const result = await collapseToFloatingAssistant();
+      setAutomationMessage(result);
+    } catch (error) {
+      setAutomationMessage(
+        error instanceof Error ? error.message : "Unable to collapse to assistant.",
+      );
+    }
+  };
+
   return (
     <main className="min-h-screen bg-background">
-      <TopBar backendStatus={backendStatus} />
+      <TopBar
+        backendStatus={backendStatus}
+        desktopAvailable={desktopAvailable}
+        onCollapseToAssistant={collapseMainWindow}
+        onShowFloatingAssistant={openFloatingAssistant}
+      />
       <div className="app-grid min-h-[calc(100vh-52px)]">
         <Sidebar selectedNav={selectedNav} onSelect={setSelectedNav} />
         <section className="flex min-w-0 flex-col gap-4 border-l border-border p-5">
@@ -241,10 +382,22 @@ function App() {
           {selectedNav === "Applications" ? (
             <ApplicationWorkspace
               applications={savedApplications}
-              reviewedCount={reviewedCount}
+              fillPlan={fillPlan}
+              fillResult={fillResult}
+              formSchema={formSchema}
+              onApplicationUpdated={updateSavedApplication}
+              onReviewField={reviewCurrentField}
             />
           ) : null}
-          {selectedNav === "Fill Plans" ? <FillPlansPage /> : null}
+          {selectedNav === "Fill Plans" ? (
+            <FillPlansPage
+              backendOnline={backendOnline}
+              fillPlan={fillPlan}
+              fillResult={fillResult}
+              formSchema={formSchema}
+              onReviewField={reviewCurrentField}
+            />
+          ) : null}
           {selectedNav === "Documents" ? (
             <DocumentsPage backendOnline={backendOnline} />
           ) : null}
@@ -257,13 +410,19 @@ function App() {
         </section>
         <AssistantRail
           automationMessage={automationMessage}
+          events={eventLog}
           fillPlan={fillPlan}
           fillResult={fillResult}
           formSchema={formSchema}
           onAutomationStep={runAutomationStep}
+          onChatAdjust={runChatAdjustment}
+          onReviewField={reviewCurrentField}
           state={assistantState}
+          successDraft={successDraft}
           successResult={successResult}
           targetUrl={targetUrl}
+          onUseDemoUrl={() => setTargetUrl(getDemoApplicationUrl())}
+          onSuccessDraftChange={setSuccessDraft}
           onTargetUrlChange={setTargetUrl}
           onRun={() => setAssistantState("running")}
           onPause={() => setAssistantState("paused")}
@@ -272,7 +431,7 @@ function App() {
       </div>
       <FloatingAssistantButton
         state={assistantState}
-        onRun={() => setAssistantState("running")}
+        onRun={openFloatingAssistant}
       />
     </main>
   );
@@ -280,27 +439,84 @@ function App() {
 
 function ApplicationWorkspace({
   applications,
-  reviewedCount,
+  fillPlan,
+  fillResult,
+  formSchema,
+  onApplicationUpdated,
+  onReviewField,
 }: {
   applications: ApplicationRecord[];
-  reviewedCount: number;
+  fillPlan: FillPlan | null;
+  fillResult: FillResult | null;
+  formSchema: FormSchema | null;
+  onApplicationUpdated: (application: ApplicationRecord) => void;
+  onReviewField: (
+    fieldId: string,
+    decision: FillPlanReviewDecision,
+    value?: string | boolean | null,
+  ) => void;
 }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (applications.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+    if (!selectedId || !applications.some((application) => application.id === selectedId)) {
+      setSelectedId(applications[0].id ?? null);
+    }
+  }, [applications, selectedId]);
+  const selectedApplication =
+    applications.find((application) => application.id === selectedId) ??
+    applications[0] ??
+    null;
+
   return (
     <>
-      <StatsRow />
+      <StatsRow
+        applications={applications}
+        fillPlan={fillPlan}
+        fillResult={fillResult}
+        formSchema={formSchema}
+      />
       <Card className="overflow-hidden">
-        <WorkspaceHeader />
+        <WorkspaceHeader fillPlan={fillPlan} formSchema={formSchema} />
         <div className="grid grid-cols-[1fr_360px] border-t border-border max-[980px]:grid-cols-1">
-          <FillPlanPanel reviewedCount={reviewedCount} />
-          <FieldReviewPanel />
+          <FillPlanPanel fillPlan={fillPlan} fillResult={fillResult} formSchema={formSchema} />
+          <FieldReviewPanel
+            fillPlan={fillPlan}
+            fillResult={fillResult}
+            formSchema={formSchema}
+            onReviewField={onReviewField}
+          />
         </div>
       </Card>
-      <ApplicationsTable applications={applications} />
+      <div className="grid grid-cols-[1fr_380px] gap-4 max-[1180px]:grid-cols-1">
+        <ApplicationsTable
+          applications={applications}
+          selectedId={selectedApplication?.id ?? null}
+          onSelect={setSelectedId}
+        />
+        <ApplicationDetailPanel
+          application={selectedApplication}
+          onApplicationUpdated={onApplicationUpdated}
+        />
+      </div>
     </>
   );
 }
 
-function TopBar({ backendStatus }: { backendStatus: "checking" | "online" | "offline" }) {
+function TopBar({
+  backendStatus,
+  desktopAvailable,
+  onCollapseToAssistant,
+  onShowFloatingAssistant,
+}: {
+  backendStatus: "checking" | "online" | "offline";
+  desktopAvailable: boolean;
+  onCollapseToAssistant: () => void;
+  onShowFloatingAssistant: () => void;
+}) {
   const statusLabel =
     backendStatus === "online"
       ? "Backend online"
@@ -326,6 +542,22 @@ function TopBar({ backendStatus }: { backendStatus: "checking" | "online" | "off
         <Badge variant={backendStatus === "online" ? "success" : "outline"}>
           {statusLabel}
         </Badge>
+        <Button
+          disabled={!desktopAvailable}
+          size="sm"
+          variant="outline"
+          onClick={onShowFloatingAssistant}
+        >
+          Float Assistant
+        </Button>
+        <Button
+          disabled={!desktopAvailable}
+          size="sm"
+          variant="outline"
+          onClick={onCollapseToAssistant}
+        >
+          Collapse
+        </Button>
         <select className="h-9 rounded-md border border-input bg-background px-3 text-sm">
           <option>Profile: Default</option>
         </select>
@@ -381,35 +613,56 @@ function Sidebar({
   );
 }
 
-function StatsRow() {
+function StatsRow({
+  applications,
+  fillPlan,
+  fillResult,
+  formSchema,
+}: {
+  applications: ApplicationRecord[];
+  fillPlan: FillPlan | null;
+  fillResult: FillResult | null;
+  formSchema: FormSchema | null;
+}) {
+  const appliedCount = applications.filter(
+    (application) => application.status === "applied",
+  ).length;
+  const draftCount = applications.filter(
+    (application) => application.status === "draft",
+  ).length;
+  const safeToFillCount =
+    fillPlan?.items.filter((item) => isSafeFillCandidate(item)).length ?? 0;
+  const reviewCount =
+    (fillPlan?.items.filter((item) => item.needs_review).length ?? 0) +
+    (fillPlan?.blocked_items.length ?? 0);
   const cards = [
     {
-      label: "Profile Completeness",
-      value: "92%",
-      hint: "All major sections complete",
+      label: "Applications",
+      value: `${applications.length}`,
+      hint: `${appliedCount} applied, ${draftCount} drafts`,
       icon: CheckCircle2,
       variant: "success" as const,
     },
     {
-      label: "Applications",
-      value: "8",
-      hint: "3 in progress",
+      label: "Current Form",
+      value: `${formSchema?.fields.length ?? 0}`,
+      hint: formSchema ? `${formSchema.ats} fields detected` : "Inspect a page first",
       icon: BriefcaseBusiness,
       variant: "default" as const,
     },
     {
-      label: "Ready to Submit",
-      value: "2",
-      hint: "Requires your review",
+      label: "Safe Fill",
+      value: `${fillResult?.filled_count ?? safeToFillCount}`,
+      hint: fillResult ? "Filled this run" : "Eligible high-confidence fields",
       icon: AlertTriangle,
       variant: "warning" as const,
     },
     {
-      label: "Auto-Fill Accuracy",
-      value: "94%",
-      hint: "Based on reviewed fields",
+      label: "Needs Review",
+      value: `${reviewCount}`,
+      hint: "Review-required or blocked fields",
       icon: ShieldCheck,
-      variant: "success" as const,
+      variant: reviewCount ? ("warning" as const) : ("success" as const),
     },
   ];
   return (
@@ -435,25 +688,27 @@ function StatsRow() {
   );
 }
 
-function WorkspaceHeader() {
+function WorkspaceHeader({
+  fillPlan,
+  formSchema,
+}: {
+  fillPlan: FillPlan | null;
+  formSchema: FormSchema | null;
+}) {
   return (
     <CardHeader className="gap-4 p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <CardTitle>Application Workspace</CardTitle>
-          <select className="h-9 rounded-md border border-input bg-background px-3 text-sm">
-            <option>Senior Software Engineer - Acme AI</option>
-          </select>
-          <Badge variant="success">In Progress</Badge>
+          <Badge variant={formSchema ? "success" : "outline"}>
+            {formSchema ? formSchema.ats : "No form"}
+          </Badge>
         </div>
-        <Button variant="outline" size="sm">
-          View Form
-          <ExternalLink data-icon="inline-end" />
-        </Button>
+        <Badge variant="warning">Manual submit only</Badge>
       </div>
       <div className="flex items-center justify-between gap-4">
         <div className="flex gap-6 text-sm">
-          {["Fill Plan & Review", "Form Preview", "Profile Matches", "Attachments", "Notes"].map(
+          {["Fill Plan & Review", "Form Fields", "Profile Matches", "Attachments", "Notes"].map(
             (tab, index) => (
               <button
                 className={cn(
@@ -470,174 +725,218 @@ function WorkspaceHeader() {
           )}
         </div>
         <span className="text-xs text-muted-foreground">
-          Source: acme_career_portal.pdf
+          {formSchema
+            ? `${fillPlan?.items.length ?? 0} planned for ${formSchema.url || "current page"}`
+            : "Open and inspect a job application page to populate this workspace."}
         </span>
       </div>
     </CardHeader>
   );
 }
 
-function FillPlanPanel({ reviewedCount }: { reviewedCount: number }) {
+function FillPlanPanel({
+  fillPlan,
+  fillResult,
+  formSchema,
+}: {
+  fillPlan: FillPlan | null;
+  fillResult: FillResult | null;
+  formSchema: FormSchema | null;
+}) {
+  const planItems = new Map(fillPlan?.items.map((item) => [item.field_id, item]) ?? []);
+  const blockedItems = new Map(
+    fillPlan?.blocked_items.map((item) => [item.field_id, item]) ?? [],
+  );
+  const resultItems = new Map(fillResult?.items.map((item) => [item.field_id, item]) ?? []);
+  const totalFields = formSchema?.fields.length ?? 0;
+  const plannedFields = fillPlan?.items.length ?? 0;
+  const progress = totalFields ? Math.round((plannedFields / totalFields) * 100) : 0;
+
   return (
     <section className="flex flex-col gap-4 p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h2 className="text-base font-semibold">Fill Plan & Review</h2>
           <p className="text-sm text-muted-foreground">
-            Review each section and approve fields before filling.
+            Current extracted fields, proposed values, confidence, and review state.
           </p>
         </div>
         <div className="flex min-w-48 flex-col gap-1 text-xs text-muted-foreground">
           <div className="flex justify-between">
             <span>Overall Progress</span>
-            <span>{reviewedCount} / 7</span>
+            <span>{plannedFields} / {totalFields}</span>
           </div>
-          <Progress value={75} />
+          <Progress value={progress} />
         </div>
       </div>
-      <div className="overflow-hidden rounded-lg border border-border">
-        <table className="w-full border-collapse text-sm">
-          <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2 font-medium">Section</th>
-              <th className="px-3 py-2 font-medium">Fields</th>
-              <th className="px-3 py-2 font-medium">Auto-Fill Coverage</th>
-              <th className="px-3 py-2 font-medium">Status</th>
-              <th className="px-3 py-2 font-medium">Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {fillSections.map((section) => (
-              <tr className="border-t border-border" key={section.section}>
-                <td className="px-3 py-3 font-medium">{section.section}</td>
-                <td className="px-3 py-3 text-muted-foreground">{section.fields}</td>
-                <td className="px-3 py-3">
-                  <div className="flex items-center gap-2">
-                    <Progress
-                      className={section.confidence === "Low" ? "[&>div]:bg-amber-500" : ""}
-                      value={section.coverage}
-                    />
-                    <span className="w-10 text-xs text-muted-foreground">
-                      {section.coverage}%
-                    </span>
-                  </div>
-                </td>
-                <td className="px-3 py-3">
-                  <Badge variant={statusVariant[section.status as keyof typeof statusVariant]}>
-                    {section.status}
-                  </Badge>
-                </td>
-                <td className="px-3 py-3">
-                  <Badge
-                    variant={
-                      confidenceVariant[
-                        section.confidence as keyof typeof confidenceVariant
-                      ]
-                    }
-                  >
-                    {section.confidence}
-                  </Badge>
-                </td>
+      {formSchema ? (
+        <div className="overflow-hidden rounded-lg border border-border">
+          <table className="w-full border-collapse text-sm">
+            <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">Field</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 font-medium">Proposed Value</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Confidence</th>
+                <th className="px-3 py-2 font-medium">Sources</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {formSchema.fields.map((field) => {
+                const item = planItems.get(field.field_id);
+                const blocked = blockedItems.get(field.field_id);
+                const result = resultItems.get(field.field_id);
+                const status = planStatusLabel(item, blocked, result);
+                const confidence = confidenceLabel(item?.confidence);
+                return (
+                  <tr className="border-t border-border" key={field.field_id}>
+                    <td className="px-3 py-3 font-medium">{field.label || field.field_id}</td>
+                    <td className="px-3 py-3 text-muted-foreground">{field.type}</td>
+                    <td className="max-w-56 truncate px-3 py-3 text-muted-foreground">
+                      {formatPlanValue(item?.value)}
+                    </td>
+                    <td className="px-3 py-3">
+                      <Badge variant={statusVariant[status]}>{status}</Badge>
+                    </td>
+                    <td className="px-3 py-3">
+                      <Badge variant={confidenceVariant[confidence]}>{confidence}</Badge>
+                    </td>
+                    <td className="px-3 py-3 text-muted-foreground">
+                      {item?.source_refs.length ?? 0}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+          No form inspected yet. Use the assistant to open a URL and inspect the
+          current application page.
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
         <div className="flex gap-4">
           <span>High (80-100%)</span>
           <span>Medium (50-79%)</span>
           <span>Low (0-49%)</span>
         </div>
-        <Button size="sm">
-          <Play data-icon="inline-start" />
-          Review All
-        </Button>
+        <span>{fillResult ? `${fillResult.filled_count} fields filled this run` : "No fill run yet"}</span>
       </div>
     </section>
   );
 }
 
-function FieldReviewPanel() {
+function FieldReviewPanel({
+  fillPlan,
+  fillResult,
+  formSchema,
+  onReviewField,
+}: {
+  fillPlan: FillPlan | null;
+  fillResult: FillResult | null;
+  formSchema: FormSchema | null;
+  onReviewField: (
+    fieldId: string,
+    decision: FillPlanReviewDecision,
+    value?: string | boolean | null,
+  ) => void;
+}) {
+  const reviewItem =
+    fillPlan?.items.find((item) => item.needs_review || item.confidence < 0.8) ??
+    fillPlan?.items[0] ??
+    null;
+  const blockedItem = fillPlan?.blocked_items[0] ?? null;
+  const activeFieldId = reviewItem?.field_id ?? blockedItem?.field_id ?? null;
+  const activeField = formSchema?.fields.find((field) => field.field_id === activeFieldId);
+  const activeResult = fillResult?.items.find((item) => item.field_id === activeFieldId);
+  const status = planStatusLabel(reviewItem, blockedItem, activeResult);
+  const confidence = confidenceLabel(reviewItem?.confidence);
+  const reason = blockedItem?.reason ?? reviewItem?.reason ?? "No fill plan item selected.";
+
   return (
     <aside className="flex flex-col gap-4 border-l border-border p-4 max-[980px]:border-l-0 max-[980px]:border-t">
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">Field Review</h2>
-        <Badge variant="warning">Needs Review</Badge>
+        <Badge variant={statusVariant[status]}>{status}</Badge>
       </div>
-      <div className="flex flex-col gap-2">
-        <span className="text-xs text-muted-foreground">Field Label</span>
-        <span className="font-medium">Current Job Title</span>
-        <span className="text-xs text-muted-foreground">Your Filled Value</span>
-        <Input value="Senior Software Engineer" readOnly />
-      </div>
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Confidence</span>
-        <Badge variant="warning">Medium (72%)</Badge>
-      </div>
-      <div className="flex flex-col gap-2 text-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-muted-foreground">Source</span>
-          <button className="text-primary">View Source</button>
+      {activeFieldId ? (
+        <>
+          <div className="flex flex-col gap-2">
+            <span className="text-xs text-muted-foreground">Field Label</span>
+            <span className="font-medium">{activeField?.label || activeFieldId}</span>
+            <span className="text-xs text-muted-foreground">Proposed Value</span>
+            <Input value={formatPlanValue(reviewItem?.value)} readOnly />
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Confidence</span>
+            <Badge variant={confidenceVariant[confidence]}>{confidence}</Badge>
+          </div>
+          <div className="flex flex-col gap-2 text-sm">
+            <span className="text-muted-foreground">Source refs</span>
+            <div className="flex flex-wrap gap-1">
+              {reviewItem?.source_refs.length ? (
+                reviewItem.source_refs.map((sourceRef) => (
+                  <Badge key={sourceRef} variant="outline">
+                    {sourceRef}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-xs text-muted-foreground">No source refs.</span>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md bg-muted/60 p-3 text-sm">
+            <span className="font-medium">Why this state?</span>
+            <p className="mt-1 text-muted-foreground">{reason}</p>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Last fill result</span>
+            <Badge variant={activeResult?.status === "filled" ? "success" : "outline"}>
+              {activeResult?.status ?? "Not filled"}
+            </Badge>
+          </div>
+          <FillPlanReviewControls
+            fillPlan={fillPlan}
+            formSchema={formSchema}
+            onReviewField={onReviewField}
+          />
+        </>
+      ) : (
+        <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+          Create a fill plan to review the next field that needs attention.
         </div>
-        <p>Profile → Work Experience → Current Position</p>
-      </div>
-      <Card className="bg-muted/40">
-        <CardContent className="flex flex-col gap-2 p-3 text-sm">
-          <span className="font-medium">Why this match?</span>
-          <p className="text-muted-foreground">
-            The job title aligns with your most recent role based on keywords and
-            recency.
-          </p>
-        </CardContent>
-      </Card>
-      <div className="flex flex-col gap-2">
-        {["Senior Software Engineer", "Software Engineer II", "Lead Software Engineer"].map(
-          (option, index) => (
-            <label className="flex items-center gap-2 text-sm" key={option}>
-              <input defaultChecked={index === 0} name="role" type="radio" />
-              <span>{option}</span>
-              {index === 0 ? (
-                <span className="text-xs text-muted-foreground">(Current Position)</span>
-              ) : null}
-            </label>
-          ),
-        )}
-      </div>
-      <Button size="sm">Confirm & Next</Button>
-      <Button variant="ghost" size="sm">
-        Edit Value
-      </Button>
+      )}
     </aside>
   );
 }
 
-function ApplicationsTable({ applications }: { applications: ApplicationRecord[] }) {
-  const rows =
-    applications.length > 0
-      ? applications.map((application) => ({
-          role: application.job_title || "Untitled role",
-          company: application.company_name || "Unknown company",
-          status:
-            application.status === "applied"
-              ? "Submitted"
-              : application.status === "draft"
-                ? "Draft"
-                : "Archived",
-          date: application.application_date ?? "Saved locally",
-          url: application.job_url || "-",
-          ats: application.ats || "generic",
-          answers: Object.keys(application.answers_snapshot ?? {}).length,
-        }))
-      : applicationRows.map((row) => ({
-          role: row.role,
-          company: row.company,
-          status: row.status,
-          date: row.lastActivity,
-          url: "-",
-          ats: row.source,
-          answers: 0,
-        }));
+function ApplicationsTable({
+  applications,
+  selectedId,
+  onSelect,
+}: {
+  applications: ApplicationRecord[];
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const rows = applications.map((application) => ({
+    id: application.id ?? null,
+    role: application.job_title || "Untitled role",
+    company: application.company_name || "Unknown company",
+    status:
+      application.status === "applied"
+        ? "Submitted"
+        : application.status === "draft"
+          ? "Draft"
+          : "Archived",
+    date: application.application_date ?? "Saved locally",
+    url: application.job_url || "-",
+    ats: application.ats || "generic",
+    answers: applicationSnapshotAnswerCount(application.answers_snapshot),
+  }));
 
   return (
     <Card className="overflow-hidden">
@@ -671,8 +970,24 @@ function ApplicationsTable({ applications }: { applications: ApplicationRecord[]
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={8}>
+                  No saved applications yet. Detect a success page after manual
+                  submission, review the record, then save it here.
+                </td>
+              </tr>
+            ) : null}
             {rows.map((row) => (
-              <tr className="border-t border-border" key={`${row.company}-${row.role}`}>
+              <tr
+                className={cn(
+                  "border-t border-border",
+                  row.id && row.id === selectedId ? "bg-muted/60" : "",
+                  row.id ? "cursor-pointer hover:bg-muted/40" : "",
+                )}
+                key={`${row.company}-${row.role}`}
+                onClick={() => onSelect(row.id)}
+              >
                 <td className="px-4 py-3 font-medium">{row.role}</td>
                 <td className="px-4 py-3 text-muted-foreground">{row.company}</td>
                 <td className="px-4 py-3 text-muted-foreground">{row.date}</td>
@@ -700,30 +1015,325 @@ function ApplicationsTable({ applications }: { applications: ApplicationRecord[]
   );
 }
 
+function ApplicationDetailPanel({
+  application,
+  onApplicationUpdated,
+}: {
+  application: ApplicationRecord | null;
+  onApplicationUpdated: (application: ApplicationRecord) => void;
+}) {
+  const [status, setStatus] = useState<ApplicationRecord["status"]>("applied");
+  const [notes, setNotes] = useState("");
+  const [saveState, setSaveState] = useState("Select an application.");
+
+  useEffect(() => {
+    if (!application) {
+      setStatus("applied");
+      setNotes("");
+      setSaveState("Select an application.");
+      return;
+    }
+    setStatus(application.status);
+    setNotes(application.notes ?? "");
+    setSaveState("Loaded from local application history.");
+  }, [application]);
+
+  const save = async () => {
+    if (!application?.id) {
+      setSaveState("No saved application selected.");
+      return;
+    }
+    setSaveState("Saving...");
+    try {
+      const updated = await patchApplication(application.id, { status, notes });
+      onApplicationUpdated(updated);
+      setSaveState("Saved locally.");
+    } catch {
+      setSaveState("Unable to save application detail.");
+    }
+  };
+
+  if (!application) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Application Detail</CardTitle>
+          <CardDescription>No saved application selected.</CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          Save a detected success record to inspect company, role, URL, notes, and
+          automation provenance here.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const answerSnapshot = applicationSnapshotFromRecord(application.answers_snapshot);
+  const answerKeys = Object.keys(application.answers_snapshot ?? {});
+  const answerCount = answerSnapshot?.fields.length ?? answerKeys.length;
+  const signals = application.success_detection?.signals ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle>Application Detail</CardTitle>
+            <CardDescription>{saveState}</CardDescription>
+          </div>
+          <Badge variant={statusVariant[statusToLabel(status)]}>{statusToLabel(status)}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 text-sm">
+        <div className="grid grid-cols-2 gap-3">
+          <InfoBlock label="Company" value={application.company_name || "Unknown"} />
+          <InfoBlock label="Role" value={application.job_title || "Untitled"} />
+          <InfoBlock label="Date" value={application.application_date ?? "-"} />
+          <InfoBlock label="ATS" value={application.ats || "generic"} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">Job URL</span>
+          <span className="break-all">{application.job_url || "-"}</span>
+        </div>
+        <label className="flex flex-col gap-2">
+          <span className="font-medium">Status</span>
+          <select
+            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            value={status}
+            onChange={(event) =>
+              setStatus(event.target.value as ApplicationRecord["status"])
+            }
+          >
+            <option value="draft">Draft</option>
+            <option value="applied">Applied</option>
+            <option value="archived">Archived</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-2">
+          <span className="font-medium">Notes</span>
+          <textarea
+            className="min-h-28 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <InfoBlock label="Answer snapshots" value={`${answerCount}`} />
+          <InfoBlock
+            label="Success confidence"
+            value={`${Math.round((application.success_detection?.confidence ?? 0) * 100)}%`}
+          />
+          <InfoBlock
+            label="Resume document"
+            value={application.resume_document_id || "-"}
+          />
+          <InfoBlock
+            label="Cover letter"
+            value={application.cover_letter_document_id || "-"}
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <span className="font-medium">Success signals</span>
+          <div className="flex flex-wrap gap-1">
+            {signals.length === 0 ? (
+              <span className="text-xs text-muted-foreground">No signals stored.</span>
+            ) : null}
+            {signals.map((signal) => (
+              <Badge key={signal} variant="outline">
+                {signal}
+              </Badge>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-col gap-2">
+          <span className="font-medium">Answer provenance</span>
+          {answerSnapshot ? (
+            <div className="flex flex-col gap-2">
+              {answerSnapshot.fields.length === 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  No field-level snapshot was stored.
+                </span>
+              ) : null}
+              {answerSnapshot.fields.slice(0, 8).map((field) => (
+                <div
+                  className="rounded-md border border-border p-3"
+                  key={`${field.field_id}-${field.action}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{field.field_id}</span>
+                    <Badge variant="outline">{field.status}</Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {field.action} · {Math.round(field.confidence * 100)}%
+                    {field.needs_review ? " · review required" : ""}
+                  </div>
+                  {field.value_preview ? (
+                    <div className="mt-2 break-words text-xs">{field.value_preview}</div>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {field.source_refs.length === 0 ? (
+                      <Badge variant="outline">no source refs</Badge>
+                    ) : null}
+                    {field.source_refs.map((sourceRef) => (
+                      <Badge key={sourceRef} variant="outline">
+                        {sourceRef}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {answerSnapshot.fields.length > 8 ? (
+                <span className="text-xs text-muted-foreground">
+                  {answerSnapshot.fields.length - 8} more fields stored in the local
+                  snapshot.
+                </span>
+              ) : null}
+              {answerSnapshot.blocked_items.length > 0 ? (
+                <div className="rounded-md border border-border p-3 text-xs text-muted-foreground">
+                  Blocked fields:{" "}
+                  {answerSnapshot.blocked_items
+                    .map((item) => `${item.field_id}: ${item.reason}`)
+                    .join("; ")}
+                </div>
+              ) : null}
+            </div>
+          ) : answerKeys.length > 0 ? (
+            <div className="rounded-md border border-border p-3 text-xs text-muted-foreground">
+              Legacy snapshot keys: {answerKeys.join(", ")}
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              No answer provenance stored yet.
+            </span>
+          )}
+        </div>
+        <Button onClick={save}>Save Detail</Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function InfoBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate font-medium">{value}</div>
+    </div>
+  );
+}
+
+function statusToLabel(status: ApplicationRecord["status"]): keyof typeof statusVariant {
+  if (status === "applied") {
+    return "Submitted";
+  }
+  if (status === "draft") {
+    return "Draft";
+  }
+  return "Archived";
+}
+
+function isSafeFillCandidate(item: FillPlan["items"][number]): boolean {
+  return (
+    item.action !== "skip" &&
+    !item.needs_review &&
+    item.confidence >= 0.8 &&
+    item.value !== null &&
+    item.source_refs.length > 0
+  );
+}
+
+function formatPlanValue(value: string | boolean | null | undefined): string {
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  return value || "-";
+}
+
+function confidenceLabel(confidence?: number): keyof typeof confidenceVariant {
+  if (confidence === undefined) {
+    return "-";
+  }
+  if (confidence >= 0.8) {
+    return "High";
+  }
+  if (confidence >= 0.5) {
+    return "Medium";
+  }
+  return "Low";
+}
+
+function planStatusLabel(
+  item: FillPlan["items"][number] | null | undefined,
+  blocked: FillPlan["blocked_items"][number] | null | undefined,
+  result: FillResult["items"][number] | null | undefined,
+): keyof typeof statusVariant {
+  if (result?.status === "filled") {
+    return "Filled";
+  }
+  if (result?.status === "needs_review") {
+    return "Needs Review";
+  }
+  if (result?.status === "blocked") {
+    return "Blocked";
+  }
+  if (result?.status === "error") {
+    return "Error";
+  }
+  if (result?.status === "skipped") {
+    return "Skipped";
+  }
+  if (blocked) {
+    return "Blocked";
+  }
+  if (item?.needs_review) {
+    return "Needs Review";
+  }
+  if (item) {
+    return "Planned";
+  }
+  return "Pending";
+}
+
 function AssistantRail({
   automationMessage,
+  events,
   fillPlan,
   fillResult,
   formSchema,
   onAutomationStep,
+  onChatAdjust,
+  onReviewField,
   state,
+  successDraft,
   successResult,
   targetUrl,
+  onUseDemoUrl,
+  onSuccessDraftChange,
   onTargetUrlChange,
   onRun,
   onPause,
   onStop,
 }: {
   automationMessage: string;
+  events: AutomationEvent[];
   fillPlan: FillPlan | null;
   fillResult: FillResult | null;
   formSchema: FormSchema | null;
   onAutomationStep: (
     step: "open" | "inspect" | "plan" | "fill" | "success" | "save" | "stop",
   ) => void;
+  onChatAdjust: (message: string) => void;
+  onReviewField: (
+    fieldId: string,
+    decision: FillPlanReviewDecision,
+    value?: string | boolean | null,
+  ) => void;
   state: "idle" | "running" | "paused";
+  successDraft: ApplicationRecord | null;
   successResult: SuccessDetectionResult | null;
   targetUrl: string;
+  onUseDemoUrl: () => void;
+  onSuccessDraftChange: (record: ApplicationRecord | null) => void;
   onTargetUrlChange: (value: string) => void;
   onRun: () => void;
   onPause: () => void;
@@ -732,6 +1342,15 @@ function AssistantRail({
   const active = state === "running";
   const plannedCount = fillPlan?.items.length ?? 0;
   const blockedCount = fillPlan?.blocked_items.length ?? 0;
+  const [chatMessage, setChatMessage] = useState("");
+  const sendChatMessage = () => {
+    const message = chatMessage.trim();
+    if (!message) {
+      return;
+    }
+    onChatAdjust(message);
+    setChatMessage("");
+  };
   return (
     <aside className="assistant-rail flex flex-col gap-4 border-l border-border bg-card p-4">
       <div className="flex items-center justify-between">
@@ -758,7 +1377,10 @@ function AssistantRail({
             value={targetUrl}
             onChange={(event) => onTargetUrlChange(event.target.value)}
           />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
+            <Button size="sm" variant="outline" onClick={onUseDemoUrl}>
+              Use Demo
+            </Button>
             <Button size="sm" variant="outline" onClick={() => onAutomationStep("open")}>
               Open URL
             </Button>
@@ -798,7 +1420,7 @@ function AssistantRail({
               Detect Success
             </Button>
             <Button
-              disabled={!successResult?.proposed_record}
+              disabled={!successDraft}
               size="sm"
               variant="outline"
               onClick={() => onAutomationStep("save")}
@@ -820,6 +1442,119 @@ function AssistantRail({
               Blocked
             </div>
           </div>
+        </CardContent>
+      </Card>
+      {fillPlan ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Review Next Field</CardTitle>
+            <CardDescription>
+              Accept a sourced value, edit with user-provided input, or leave blank.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FillPlanReviewControls
+              fillPlan={fillPlan}
+              formSchema={formSchema}
+              onReviewField={onReviewField}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+      {successResult ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Detected Record</CardTitle>
+            <CardDescription>
+              Review the structured record after you submit manually.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 text-sm">
+            {successDraft ? (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <ProfileLikeInput
+                    label="Company"
+                    value={successDraft.company_name}
+                    onChange={(value) =>
+                      onSuccessDraftChange({ ...successDraft, company_name: value })
+                    }
+                  />
+                  <ProfileLikeInput
+                    label="Position"
+                    value={successDraft.job_title}
+                    onChange={(value) =>
+                      onSuccessDraftChange({ ...successDraft, job_title: value })
+                    }
+                  />
+                  <ProfileLikeInput
+                    label="Date"
+                    value={successDraft.application_date ?? ""}
+                    onChange={(value) =>
+                      onSuccessDraftChange({ ...successDraft, application_date: value })
+                    }
+                  />
+                  <ProfileLikeInput
+                    label="ATS"
+                    value={successDraft.ats}
+                    onChange={(value) =>
+                      onSuccessDraftChange({ ...successDraft, ats: value })
+                    }
+                  />
+                </div>
+                <ProfileLikeInput
+                  label="Job URL"
+                  value={successDraft.job_url}
+                  onChange={(value) =>
+                    onSuccessDraftChange({ ...successDraft, job_url: value })
+                  }
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Confidence</span>
+                  <Badge variant={successResult.detected ? "success" : "outline"}>
+                    {Math.round(successResult.confidence * 100)}%
+                  </Badge>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {successResult.signals.map((signal) => (
+                    <Badge key={signal} variant="outline">
+                      {signal}
+                    </Badge>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md bg-muted p-3 text-muted-foreground">
+                No saveable success proposal yet. Run Detect Success after the
+                employer site shows its confirmation page.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+      <Card>
+        <CardHeader>
+          <CardTitle>Event Stream</CardTitle>
+          <CardDescription>Live backend events for manual verification.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {events.length === 0 ? (
+            <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              No events yet. Open, inspect, or create a fill plan to start the stream.
+            </div>
+          ) : null}
+          {events.map((event) => (
+            <div
+              className="flex items-start justify-between gap-3 rounded-md border border-border p-2 text-sm"
+              key={event.id}
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium">{event.event_type}</div>
+                <div className="text-xs text-muted-foreground">{event.message}</div>
+              </div>
+              <Badge variant={eventVariant[event.status]}>{event.status}</Badge>
+            </div>
+          ))}
         </CardContent>
       </Card>
       <Card>
@@ -878,13 +1613,44 @@ function AssistantRail({
         </CardContent>
       </Card>
       <div className="mt-auto flex flex-col gap-2">
-        <Input placeholder="Ask me to adjust this field..." />
+        <div className="flex gap-2">
+          <Input
+            placeholder="Ask me to adjust this field..."
+            value={chatMessage}
+            onChange={(event) => setChatMessage(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                sendChatMessage();
+              }
+            }}
+          />
+          <Button size="sm" onClick={sendChatMessage}>
+            Send
+          </Button>
+        </div>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>Local AI • Private • Offline First</span>
           <span>{API_BASE}</span>
         </div>
       </div>
     </aside>
+  );
+}
+
+function ProfileLikeInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1.5 text-sm">
+      <span className="font-medium">{label}</span>
+      <Input value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
   );
 }
 

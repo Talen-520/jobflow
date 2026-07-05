@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.db.database import Database
 from app.services.browser_controller import BrowserController
 from app.services.document_vault import DocumentVaultService
+from app.services.event_bus import EventBus
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -17,6 +18,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     resolved_db_path = Path(db_path or settings.db_path)
     app.state.database = Database(resolved_db_path)
     app.state.browser = BrowserController()
+    app.state.event_bus = EventBus()
     vault_path = settings.vault_path if db_path is None else resolved_db_path.parent / "vault"
     app.state.vault = DocumentVaultService(vault_path)
     app.add_middleware(
