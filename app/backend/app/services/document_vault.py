@@ -26,6 +26,22 @@ class DocumentVaultService:
         document.path = str(destination.resolve())
         return document
 
+    def delete_document_file(self, document: DocumentRecord) -> bool:
+        if not document.path:
+            return False
+        path = Path(document.path).expanduser()
+        try:
+            resolved_path = path.resolve()
+            resolved_vault = self.vault_path.resolve()
+            resolved_path.relative_to(resolved_vault)
+        except (FileNotFoundError, ValueError):
+            return False
+
+        if not resolved_path.is_file():
+            return False
+        resolved_path.unlink()
+        return True
+
     def _vault_filename(self, document: DocumentRecord, source: Path) -> str:
         stem = self._slug(document.name or source.stem)
         suffix = source.suffix.lower()

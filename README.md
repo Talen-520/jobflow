@@ -36,12 +36,14 @@ This repository contains the MVP scaffold:
   deterministic fallback.
 - Prompt Context Preview showing the exact local sources, rules, preferences,
   and generated prompt boundary available to AI tools.
-- Local document vault import that copies selected files into app-managed storage.
+- Local document vault import and removal for app-managed resumes, cover letters,
+  and supporting files.
 - Settings screen JSON export/import for local profile, rules, document
   references, and application records.
 - Settings controls for salary, relocation, missing-fact, and low-confidence
   fill-plan policies.
-- Live automation event stream for the assistant panel.
+- Live automation event stream with recent local history and a clear-history
+  control for the assistant panel.
 - Main workspace refreshes local profile and application state from automation
   events, so floating-assistant saves and document imports show up without a
   manual reload.
@@ -57,7 +59,7 @@ This repository contains the MVP scaffold:
 - Searchable application history with status filtering, selectable details,
   editable company, role, date, URL, ATS, status, notes, success signals,
   uploaded document names, answer snapshot counts, and compact field-level
-  source provenance.
+  source provenance, plus confirmed local record deletion.
 - Manual application record creation for cases where success detection is not
   available or the user wants to log an application directly.
 - Dashboard summarizes live local readiness, profile completeness, document and
@@ -67,7 +69,8 @@ This repository contains the MVP scaffold:
   and the local demo application.
 - Applications workspace stats, fill-plan table, and review panel are driven by
   current local app state instead of bundled sample rows.
-- Profile UI for identity, links, work authorization, answer bank entries, and
+- Profile UI for identity, address, public links, portfolio, work
+  authorization, education facts, tagged answer-bank entries, and removable
   user-provided fact categories.
 - Safety rules that prevent unsupported factual claims and final auto-submit.
 

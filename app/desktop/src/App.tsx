@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Square,
+  Trash2,
   User,
 } from "lucide-react";
 import { motion } from "motion/react";
@@ -55,8 +56,10 @@ import {
   API_BASE,
   applyFillPlan,
   chatAdjust,
+  clearEventHistory,
   createApplication,
   createFillPlan,
+  deleteApplication,
   detectSuccess,
   getDemoApplicationUrl,
   getEventsUrl,
@@ -64,6 +67,7 @@ import {
   getProfile,
   inspectForm,
   listApplications,
+  listEventHistory,
   openBrowser,
   patchApplication,
   reviewFillPlanField,
@@ -133,8 +137,35 @@ type SaveReviewedAnswerRequest = {
   tags: string[];
 };
 
-const applicationRefreshEvents = new Set(["application.saved", "application.updated"]);
-const profileRefreshEvents = new Set(["document.imported", "profile.answer_saved"]);
+const applicationRefreshEvents = new Set([
+  "application.saved",
+  "application.updated",
+  "application.deleted",
+]);
+const profileRefreshEvents = new Set([
+  "document.imported",
+  "document.deleted",
+  "profile.answer_saved",
+]);
+
+function mergeEventLog(
+  incoming: AutomationEvent[],
+  current: AutomationEvent[] = [],
+): AutomationEvent[] {
+  const seen = new Set<string>();
+  const merged: AutomationEvent[] = [];
+  for (const event of [...incoming, ...current]) {
+    if (seen.has(event.id)) {
+      continue;
+    }
+    seen.add(event.id);
+    merged.push(event);
+    if (merged.length >= 8) {
+      break;
+    }
+  }
+  return merged;
+}
 
 function App() {
   const [selectedNav, setSelectedNav] = useState("Applications");
@@ -182,6 +213,9 @@ function App() {
         setProfileState(null);
         setProfileDocuments([]);
       });
+    listEventHistory(8, controller.signal)
+      .then((events) => setEventLog((current) => mergeEventLog(events, current)))
+      .catch(() => undefined);
     return () => controller.abort();
   }, [backendStatus]);
 
@@ -193,7 +227,7 @@ function App() {
     socket.onmessage = (message) => {
       try {
         const event = JSON.parse(message.data) as AutomationEvent;
-        setEventLog((current) => [event, ...current].slice(0, 8));
+        setEventLog((current) => mergeEventLog([event], current));
         if (event.message) {
           setAutomationMessage(event.message);
         }
@@ -416,6 +450,24 @@ function App() {
     ]);
   };
 
+  const removeSavedApplication = (recordId: string) => {
+    setSavedApplications((current) =>
+      current.filter((application) => application.id !== recordId),
+    );
+  };
+
+  const clearEvents = async () => {
+    try {
+      const result = await clearEventHistory();
+      setEventLog([]);
+      setAutomationMessage(`Cleared ${result.deleted_count} local event records.`);
+    } catch (error) {
+      setAutomationMessage(
+        error instanceof Error ? error.message : "Unable to clear event history.",
+      );
+    }
+  };
+
   const handleProfileUpdated = (profile: Profile) => {
     setProfileState(profile);
     setProfileDocuments(profile.documents);
@@ -515,6 +567,7 @@ function App() {
               fillResult={fillResult}
               formSchema={formSchema}
               onApplicationCreated={addSavedApplication}
+              onApplicationDeleted={removeSavedApplication}
               onApplicationUpdated={updateSavedApplication}
               onReviewField={reviewCurrentField}
               onSaveReviewedAnswer={saveReviewedAnswer}
@@ -551,6 +604,7 @@ function App() {
           formSchema={formSchema}
           onAutomationStep={runAutomationStep}
           onChatAdjust={runChatAdjustment}
+          onClearEvents={clearEvents}
           onReviewField={reviewCurrentField}
           onSaveReviewedAnswer={saveReviewedAnswer}
           state={assistantState}
@@ -580,6 +634,7 @@ function ApplicationWorkspace({
   fillResult,
   formSchema,
   onApplicationCreated,
+  onApplicationDeleted,
   onApplicationUpdated,
   onReviewField,
   onSaveReviewedAnswer,
@@ -590,6 +645,7 @@ function ApplicationWorkspace({
   fillResult: FillResult | null;
   formSchema: FormSchema | null;
   onApplicationCreated: (application: ApplicationRecord) => void;
+  onApplicationDeleted: (recordId: string) => void;
   onApplicationUpdated: (application: ApplicationRecord) => void;
   onReviewField: (
     fieldId: string,
@@ -612,6 +668,12 @@ function ApplicationWorkspace({
     applications.find((application) => application.id === selectedId) ??
     applications[0] ??
     null;
+  const handleApplicationDeleted = (recordId: string) => {
+    onApplicationDeleted(recordId);
+    if (selectedId === recordId) {
+      setSelectedId(null);
+    }
+  };
 
   return (
     <>
@@ -653,6 +715,7 @@ function ApplicationWorkspace({
         <ApplicationDetailPanel
           application={selectedApplication}
           documents={documents}
+          onApplicationDeleted={handleApplicationDeleted}
           onApplicationUpdated={onApplicationUpdated}
         />
       </div>
@@ -1379,10 +1442,12 @@ function ApplicationsTable({
 function ApplicationDetailPanel({
   application,
   documents,
+  onApplicationDeleted,
   onApplicationUpdated,
 }: {
   application: ApplicationRecord | null;
   documents: DocumentRecord[];
+  onApplicationDeleted: (recordId: string) => void;
   onApplicationUpdated: (application: ApplicationRecord) => void;
 }) {
   const [companyName, setCompanyName] = useState("");
@@ -1392,6 +1457,7 @@ function ApplicationDetailPanel({
   const [ats, setAts] = useState("generic");
   const [status, setStatus] = useState<ApplicationRecord["status"]>("applied");
   const [notes, setNotes] = useState("");
+  const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [saveState, setSaveState] = useState("Select an application.");
 
   useEffect(() => {
@@ -1403,6 +1469,7 @@ function ApplicationDetailPanel({
       setAts("generic");
       setStatus("applied");
       setNotes("");
+      setDeleteConfirming(false);
       setSaveState("Select an application.");
       return;
     }
@@ -1413,6 +1480,7 @@ function ApplicationDetailPanel({
     setAts(application.ats || "generic");
     setStatus(application.status);
     setNotes(application.notes ?? "");
+    setDeleteConfirming(false);
     setSaveState("Loaded from local application history.");
   }, [application]);
 
@@ -1436,6 +1504,27 @@ function ApplicationDetailPanel({
       setSaveState("Saved locally.");
     } catch {
       setSaveState("Unable to save application detail.");
+    }
+  };
+
+  const remove = async () => {
+    if (!application?.id) {
+      setSaveState("No saved application selected.");
+      return;
+    }
+    if (!deleteConfirming) {
+      setDeleteConfirming(true);
+      setSaveState("Click Confirm Delete to remove this local record.");
+      return;
+    }
+    setSaveState("Deleting local record...");
+    try {
+      const deleted = await deleteApplication(application.id);
+      onApplicationDeleted(deleted.id);
+      setDeleteConfirming(false);
+      setSaveState("Deleted local record.");
+    } catch {
+      setSaveState("Unable to delete application record.");
     }
   };
 
@@ -1595,7 +1684,26 @@ function ApplicationDetailPanel({
             </span>
           )}
         </div>
-        <Button onClick={save}>Save Detail</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+          <Button onClick={save}>Save Detail</Button>
+          <div className="flex items-center gap-2">
+            {deleteConfirming ? (
+              <Button
+                onClick={() => {
+                  setDeleteConfirming(false);
+                  setSaveState("Delete cancelled.");
+                }}
+                variant="outline"
+              >
+                Cancel
+              </Button>
+            ) : null}
+            <Button onClick={remove} variant={deleteConfirming ? "destructive" : "outline"}>
+              <Trash2 className="size-4" />
+              {deleteConfirming ? "Confirm Delete" : "Delete Record"}
+            </Button>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
@@ -1764,6 +1872,7 @@ function AssistantRail({
   formSchema,
   onAutomationStep,
   onChatAdjust,
+  onClearEvents,
   onReviewField,
   onSaveReviewedAnswer,
   state,
@@ -1786,6 +1895,7 @@ function AssistantRail({
     step: "open" | "inspect" | "plan" | "fill" | "success" | "save" | "stop",
   ) => void;
   onChatAdjust: (message: string) => void;
+  onClearEvents: () => void;
   onReviewField: (
     fieldId: string,
     decision: FillPlanReviewDecision,
@@ -1807,6 +1917,7 @@ function AssistantRail({
   const plannedCount = fillPlan?.items.length ?? 0;
   const blockedCount = fillPlan?.blocked_items.length ?? 0;
   const [chatMessage, setChatMessage] = useState("");
+  const [confirmClearEvents, setConfirmClearEvents] = useState(false);
   const sendChatMessage = () => {
     const message = chatMessage.trim();
     if (!message) {
@@ -1814,6 +1925,14 @@ function AssistantRail({
     }
     onChatAdjust(message);
     setChatMessage("");
+  };
+  const clearEvents = () => {
+    if (!confirmClearEvents) {
+      setConfirmClearEvents(true);
+      return;
+    }
+    onClearEvents();
+    setConfirmClearEvents(false);
   };
   return (
     <aside className="assistant-rail flex flex-col gap-4 border-l border-border bg-card p-4">
@@ -1999,8 +2118,33 @@ function AssistantRail({
       ) : null}
       <Card>
         <CardHeader>
-          <CardTitle>Event Stream</CardTitle>
-          <CardDescription>Live backend events for manual verification.</CardDescription>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle>Event Stream</CardTitle>
+              <CardDescription>
+                Recent local history plus live backend events for manual verification.
+              </CardDescription>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {confirmClearEvents ? (
+                <Button
+                  onClick={() => setConfirmClearEvents(false)}
+                  size="sm"
+                  variant="outline"
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              <Button
+                disabled={events.length === 0}
+                onClick={clearEvents}
+                size="sm"
+                variant={confirmClearEvents ? "destructive" : "outline"}
+              >
+                {confirmClearEvents ? "Confirm Clear" : "Clear History"}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {events.length === 0 ? (

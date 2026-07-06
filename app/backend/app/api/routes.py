@@ -2,22 +2,34 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse
 
 from app.db.database import Database
 from app.models.schemas import (
     AnswerBankEntry,
     AnswerBankSaveRequest,
+    AutomationEvent,
+    ApplicationDeleteResult,
     ApplicationRecord,
     ApplyFillPlanRequest,
     BrowserState,
     BrowserOpenRequest,
     ChatAdjustResult,
     DataExport,
+    DocumentDeleteResult,
     DocumentRecord,
     ChatAdjustRequest,
     DocumentImportRequest,
+    EventHistoryClearResult,
     FillResult,
     FillPlan,
     FillPlanRequest,
@@ -101,6 +113,19 @@ def demo_submitted_page() -> HTMLResponse:
 @router.post("/demo/submitted", response_class=HTMLResponse)
 def demo_submitted_post() -> HTMLResponse:
     return HTMLResponse(DEMO_SUBMITTED_HTML)
+
+
+@router.get("/events/history", response_model=list[AutomationEvent])
+def list_event_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Database = Depends(get_database),
+) -> list[AutomationEvent]:
+    return db.list_automation_events(limit)
+
+
+@router.delete("/events/history", response_model=EventHistoryClearResult)
+def clear_event_history(db: Database = Depends(get_database)) -> EventHistoryClearResult:
+    return EventHistoryClearResult(deleted_count=db.clear_automation_events())
 
 
 @router.websocket("/events")
@@ -222,6 +247,27 @@ def patch_application(
     return updated
 
 
+@router.delete("/applications/{record_id}", response_model=ApplicationDeleteResult)
+def delete_application(
+    record_id: str,
+    db: Database = Depends(get_database),
+    event_bus: EventBus = Depends(get_event_bus),
+) -> ApplicationDeleteResult:
+    try:
+        deleted = db.delete_application(record_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Application not found") from exc
+    publish_event(
+        event_bus,
+        db,
+        "application.deleted",
+        f"Deleted application record for {deleted.company_name or 'unknown company'}.",
+        "warning",
+        {"application_id": deleted.id, "company_name": deleted.company_name},
+    )
+    return ApplicationDeleteResult(id=deleted.id)
+
+
 @router.post("/documents/import", response_model=DocumentRecord)
 def import_document(
     request: DocumentImportRequest,
@@ -246,6 +292,37 @@ def import_document(
         {"document_id": document.id, "kind": document.kind},
     )
     return document
+
+
+@router.delete("/documents/{document_id}", response_model=DocumentDeleteResult)
+def delete_document(
+    document_id: str,
+    db: Database = Depends(get_database),
+    vault: DocumentVaultService = Depends(get_vault),
+    event_bus: EventBus = Depends(get_event_bus),
+) -> DocumentDeleteResult:
+    profile = db.get_profile()
+    document = next((item for item in profile.documents if item.id == document_id), None)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    profile.documents = [item for item in profile.documents if item.id != document_id]
+    saved = UserProfile.model_validate(profile.model_dump(mode="json"))
+    db.put_profile(saved)
+    file_deleted = vault.delete_document_file(document)
+    publish_event(
+        event_bus,
+        db,
+        "document.deleted",
+        f"Deleted {document.name or 'document'} from the local vault.",
+        "warning",
+        {
+            "document_id": document.id,
+            "kind": document.kind,
+            "file_deleted": file_deleted,
+        },
+    )
+    return DocumentDeleteResult(id=document.id, file_deleted=file_deleted)
 
 
 @router.get("/data/export", response_model=DataExport)

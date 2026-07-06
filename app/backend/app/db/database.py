@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.models.schemas import ApplicationRecord, Preferences, UserProfile
+from app.models.schemas import AutomationEvent, ApplicationRecord, Preferences, UserProfile
 
 
 class Database:
@@ -138,6 +138,12 @@ class Database:
             raise KeyError(record_id)
         return ApplicationRecord.model_validate_json(row["payload"])
 
+    def delete_application(self, record_id: str) -> ApplicationRecord:
+        current = self.get_application(record_id)
+        with self.connect() as db:
+            db.execute("delete from applications where id = ?", (record_id,))
+        return current
+
     def log_event(self, event_type: str, payload: dict[str, Any]) -> None:
         with self.connect() as db:
             db.execute(
@@ -151,6 +157,24 @@ class Database:
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
+
+    def list_automation_events(self, limit: int = 100) -> list[AutomationEvent]:
+        safe_limit = max(1, min(limit, 200))
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                select payload from automation_events
+                order by id desc
+                limit ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [AutomationEvent.model_validate_json(row["payload"]) for row in rows]
+
+    def clear_automation_events(self) -> int:
+        with self.connect() as db:
+            cursor = db.execute("delete from automation_events")
+        return max(cursor.rowcount, 0)
 
     def _get_state(self, table: str) -> sqlite3.Row | None:
         with self.connect() as db:

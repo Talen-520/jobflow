@@ -188,6 +188,73 @@ def test_document_import_open_answer_and_data_export(tmp_path: Path) -> None:
     assert imported["profile"]["answer_bank"][0]["id"] == "answer_default"
 
 
+def test_document_delete_removes_profile_reference_and_vault_file(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+    resume = tmp_path / "resume.txt"
+    resume.write_text("Resume content", encoding="utf-8")
+
+    document_response = client.post(
+        "/documents/import",
+        json={"kind": "resume", "name": "Main Resume", "path": str(resume)},
+    )
+    assert document_response.status_code == 200
+    document = document_response.json()
+    vault_path = Path(document["path"])
+    assert vault_path.exists()
+    assert vault_path.parent == tmp_path / "vault"
+
+    delete_response = client.delete(f"/documents/{document['id']}")
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "id": document["id"],
+        "status": "deleted",
+        "file_deleted": True,
+    }
+    assert not vault_path.exists()
+
+    profile_response = client.get("/profile")
+    assert profile_response.status_code == 200
+    assert profile_response.json()["documents"] == []
+
+    with client.websocket_connect("/events") as websocket:
+        events = [websocket.receive_json() for _ in range(2)]
+    delete_event = events[-1]
+    serialized_event = json.dumps(delete_event)
+    assert delete_event["event_type"] == "document.deleted"
+    assert delete_event["payload"]["document_id"] == document["id"]
+    assert str(vault_path) not in serialized_event
+
+    missing_response = client.delete(f"/documents/{document['id']}")
+    assert missing_response.status_code == 404
+
+
+def test_document_delete_does_not_remove_external_profile_file(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+    external_resume = tmp_path / "external-resume.pdf"
+    external_resume.write_bytes(b"%PDF-1.4 external resume")
+    profile = UserProfile(
+        documents=[
+            DocumentRecord(
+                id="doc_external",
+                kind="resume",
+                name="External Resume",
+                path=str(external_resume),
+            )
+        ]
+    )
+    assert client.put("/profile", json=profile.model_dump(mode="json")).status_code == 200
+
+    delete_response = client.delete("/documents/doc_external")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["file_deleted"] is False
+    assert external_resume.exists()
+    assert client.get("/profile").json()["documents"] == []
+
+
 def test_save_reviewed_answer_bank_entry_is_reusable_and_event_safe(
     tmp_path: Path,
 ) -> None:
@@ -328,8 +395,28 @@ def test_application_detail_and_patch(tmp_path: Path) -> None:
     assert patched["status"] == "archived"
     assert patched["notes"] == "Followed up by email."
 
+    delete_response = client.delete(f"/applications/{created['id']}")
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"id": created["id"], "status": "deleted"}
+
+    with client.websocket_connect("/events") as websocket:
+        events = [websocket.receive_json() for _ in range(3)]
+    delete_event = events[-1]
+    assert delete_event["event_type"] == "application.deleted"
+    assert delete_event["payload"]["application_id"] == created["id"]
+    assert "Followed up by email." not in json.dumps(delete_event)
+
+    list_response = client.get("/applications")
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+    deleted_detail_response = client.get(f"/applications/{created['id']}")
+    assert deleted_detail_response.status_code == 404
+
     missing_response = client.get("/applications/app_missing")
     assert missing_response.status_code == 404
+    missing_delete_response = client.delete("/applications/app_missing")
+    assert missing_delete_response.status_code == 404
 
 
 def test_events_websocket_replays_recent_events(tmp_path: Path) -> None:
@@ -381,3 +468,31 @@ def test_chat_adjustment_event_redacts_user_text_and_plan_values(tmp_path: Path)
     assert event["payload"]["updated_plan"] == "[redacted]"
     assert "tao@example.com" not in serialized_event
     assert "Private long answer" not in serialized_event
+
+    history_response = client.get("/events/history?limit=5")
+    assert history_response.status_code == 200
+    history = history_response.json()
+    assert history[0]["event_type"] == "automation.chat_adjusted"
+    assert history[0]["payload"]["message"] == "[redacted]"
+    assert history[0]["payload"]["updated_plan"] == "[redacted]"
+    serialized_history = json.dumps(history)
+    assert "tao@example.com" not in serialized_history
+    assert "Private long answer" not in serialized_history
+
+
+def test_event_history_can_be_cleared(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+
+    assert client.post("/automation/pause").status_code == 200
+    assert client.post("/automation/resume").status_code == 200
+    history_response = client.get("/events/history?limit=10")
+    assert history_response.status_code == 200
+    assert len(history_response.json()) == 2
+
+    clear_response = client.delete("/events/history")
+    assert clear_response.status_code == 200
+    assert clear_response.json() == {"status": "cleared", "deleted_count": 2}
+
+    empty_history_response = client.get("/events/history?limit=10")
+    assert empty_history_response.status_code == 200
+    assert empty_history_response.json() == []

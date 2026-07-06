@@ -1,5 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, Database, FileText, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  FileText,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 
 import { FillPlanReviewControls } from "@/components/fill-plan-review-controls";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +24,7 @@ import {
   type AnswerBankEntry,
   type DataExport,
   defaultPreferences,
+  deleteDocument,
   draftOpenAnswer,
   emptyProfile,
   exportData,
@@ -49,7 +57,7 @@ export function ProfilePage({
 }) {
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [status, setStatus] = useState("Not saved");
-  type FactListKey = "experience_facts" | "project_facts" | "skill_facts";
+  type FactListKey = "education" | "experience_facts" | "project_facts" | "skill_facts";
 
   useEffect(() => {
     if (!backendOnline) {
@@ -102,14 +110,21 @@ export function ProfilePage({
   const updateFact = (
     key: FactListKey,
     index: number,
-    field: keyof Pick<Fact, "title" | "body">,
-    value: string,
+    field: keyof Pick<Fact, "title" | "body" | "tags">,
+    value: string | string[],
   ) => {
     setProfile((current) => ({
       ...current,
       [key]: current[key].map((fact, factIndex) =>
         factIndex === index ? { ...fact, [field]: value } : fact,
       ),
+    }));
+  };
+
+  const removeFact = (key: FactListKey, index: number) => {
+    setProfile((current) => ({
+      ...current,
+      [key]: current[key].filter((_, factIndex) => factIndex !== index),
     }));
   };
 
@@ -125,14 +140,21 @@ export function ProfilePage({
 
   const updateAnswer = (
     index: number,
-    field: keyof Pick<AnswerBankEntry, "question_type" | "title" | "body">,
-    value: string,
+    field: keyof Pick<AnswerBankEntry, "question_type" | "title" | "body" | "tags">,
+    value: string | string[],
   ) => {
     setProfile((current) => ({
       ...current,
       answer_bank: current.answer_bank.map((answer, answerIndex) =>
         answerIndex === index ? { ...answer, [field]: value } : answer,
       ),
+    }));
+  };
+
+  const removeAnswer = (index: number) => {
+    setProfile((current) => ({
+      ...current,
+      answer_bank: current.answer_bank.filter((_, answerIndex) => answerIndex !== index),
     }));
   };
 
@@ -196,6 +218,11 @@ export function ProfilePage({
               onChange={(value) => updateIdentity("location", value)}
             />
             <ProfileInput
+              label="Address"
+              value={profile.identity.address}
+              onChange={(value) => updateIdentity("address", value)}
+            />
+            <ProfileInput
               label="LinkedIn"
               value={profile.links.linkedin}
               onChange={(value) => updateLink("linkedin", value)}
@@ -204,6 +231,11 @@ export function ProfilePage({
               label="GitHub"
               value={profile.links.github}
               onChange={(value) => updateLink("github", value)}
+            />
+            <ProfileInput
+              label="Portfolio"
+              value={profile.links.portfolio}
+              onChange={(value) => updateLink("portfolio", value)}
             />
           </CardContent>
         </Card>
@@ -217,6 +249,7 @@ export function ProfilePage({
               <InfoLine label="Backend" value={backendOnline ? "Online" : "Offline"} />
               <InfoLine label="Documents" value={`${profile.documents.length}`} />
               <InfoLine label="Answer bank" value={`${profile.answer_bank.length}`} />
+              <InfoLine label="Education facts" value={`${profile.education.length}`} />
               <InfoLine label="Experience facts" value={`${profile.experience_facts.length}`} />
               <InfoLine
                 label="Work auth"
@@ -268,6 +301,16 @@ export function ProfilePage({
       </div>
       <div className="grid grid-cols-2 gap-4 max-[980px]:grid-cols-1">
         <FactListEditor
+          description="Verified education facts such as degrees, programs, schools, and dates."
+          entries={profile.education}
+          title="Education Facts"
+          onAdd={() => addFact("education")}
+          onChange={(index, field, value) =>
+            updateFact("education", index, field, value)
+          }
+          onRemove={(index) => removeFact("education", index)}
+        />
+        <FactListEditor
           description="Concrete work history facts AI may cite or rewrite."
           entries={profile.experience_facts}
           title="Experience Facts"
@@ -275,6 +318,7 @@ export function ProfilePage({
           onChange={(index, field, value) =>
             updateFact("experience_facts", index, field, value)
           }
+          onRemove={(index) => removeFact("experience_facts", index)}
         />
         <FactListEditor
           description="Project examples available for role-specific answers."
@@ -284,6 +328,7 @@ export function ProfilePage({
           onChange={(index, field, value) =>
             updateFact("project_facts", index, field, value)
           }
+          onRemove={(index) => removeFact("project_facts", index)}
         />
         <FactListEditor
           description="Skills and technologies that can map to form fields."
@@ -293,11 +338,13 @@ export function ProfilePage({
           onChange={(index, field, value) =>
             updateFact("skill_facts", index, field, value)
           }
+          onRemove={(index) => removeFact("skill_facts", index)}
         />
         <AnswerBankEditor
           entries={profile.answer_bank}
           onAdd={addAnswer}
           onChange={updateAnswer}
+          onRemove={removeAnswer}
         />
       </div>
     </PageShell>
@@ -502,6 +549,7 @@ export function DocumentsPage({
   const [kind, setKind] = useState<"resume" | "cover_letter" | "other">("resume");
   const [name, setName] = useState("Main Resume");
   const [path, setPath] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [status, setStatus] = useState("Load your profile to view vault documents.");
 
   useEffect(() => {
@@ -535,8 +583,36 @@ export function DocumentsPage({
       setDocuments(updatedProfile.documents);
       onProfileUpdated?.(updatedProfile);
       setStatus(`Imported ${document.name}.`);
+      setConfirmDeleteId(null);
     } catch {
       setStatus("Import failed. Check that the path exists on this machine.");
+    }
+  };
+
+  const removeDocument = async (document: DocumentRecord) => {
+    if (!document.id) {
+      setStatus("This document is missing an id and cannot be removed here.");
+      return;
+    }
+    if (confirmDeleteId !== document.id) {
+      setConfirmDeleteId(document.id);
+      setStatus(`Click Confirm Remove to delete ${document.name || "this document"}.`);
+      return;
+    }
+    setStatus("Removing document from the local vault...");
+    try {
+      const result = await deleteDocument(document.id);
+      const updatedProfile = await getProfile();
+      setDocuments(updatedProfile.documents);
+      onProfileUpdated?.(updatedProfile);
+      setConfirmDeleteId(null);
+      setStatus(
+        result.file_deleted
+          ? `Removed ${document.name || "document"} and deleted its vault file.`
+          : `Removed ${document.name || "document"} from your profile.`,
+      );
+    } catch {
+      setStatus("Document removal failed.");
     }
   };
 
@@ -602,7 +678,30 @@ export function DocumentsPage({
                     </span>
                   </div>
                 </div>
-                <Badge variant="outline">{document.kind}</Badge>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge variant="outline">{document.kind}</Badge>
+                  {confirmDeleteId === document.id ? (
+                    <Button
+                      onClick={() => {
+                        setConfirmDeleteId(null);
+                        setStatus("Document removal cancelled.");
+                      }}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Cancel
+                    </Button>
+                  ) : null}
+                  <Button
+                    disabled={!backendOnline}
+                    onClick={() => void removeDocument(document)}
+                    size="sm"
+                    variant={confirmDeleteId === document.id ? "destructive" : "outline"}
+                  >
+                    <Trash2 className="size-3.5" />
+                    {confirmDeleteId === document.id ? "Confirm Remove" : "Remove"}
+                  </Button>
+                </div>
               </div>
             ))}
           </CardContent>
@@ -1280,6 +1379,7 @@ function FactListEditor({
   entries,
   onAdd,
   onChange,
+  onRemove,
 }: {
   title: string;
   description: string;
@@ -1287,9 +1387,10 @@ function FactListEditor({
   onAdd: () => void;
   onChange: (
     index: number,
-    field: keyof Pick<Fact, "title" | "body">,
-    value: string,
+    field: keyof Pick<Fact, "title" | "body" | "tags">,
+    value: string | string[],
   ) => void;
+  onRemove: (index: number) => void;
 }) {
   return (
     <Card>
@@ -1310,10 +1411,22 @@ function FactListEditor({
         ) : null}
         {entries.map((entry, index) => (
           <div className="flex flex-col gap-2 rounded-md border border-border p-3" key={entry.id ?? index}>
+            <div className="flex items-center justify-between gap-2">
+              <Badge variant="outline">Fact {index + 1}</Badge>
+              <Button size="sm" variant="outline" onClick={() => onRemove(index)}>
+                <Trash2 className="size-3.5" />
+                Remove
+              </Button>
+            </div>
             <ProfileInput
               label="Title"
               value={entry.title}
               onChange={(value) => onChange(index, "title", value)}
+            />
+            <ProfileInput
+              label="Tags"
+              value={formatTags(entry.tags)}
+              onChange={(value) => onChange(index, "tags", parseTags(value))}
             />
             <label className="flex flex-col gap-2 text-sm">
               <span className="font-medium">Fact</span>
@@ -1334,14 +1447,16 @@ function AnswerBankEditor({
   entries,
   onAdd,
   onChange,
+  onRemove,
 }: {
   entries: AnswerBankEntry[];
   onAdd: () => void;
   onChange: (
     index: number,
-    field: keyof Pick<AnswerBankEntry, "question_type" | "title" | "body">,
-    value: string,
+    field: keyof Pick<AnswerBankEntry, "question_type" | "title" | "body" | "tags">,
+    value: string | string[],
   ) => void;
+  onRemove: (index: number) => void;
 }) {
   return (
     <Card>
@@ -1364,6 +1479,13 @@ function AnswerBankEditor({
         ) : null}
         {entries.map((entry, index) => (
           <div className="flex flex-col gap-2 rounded-md border border-border p-3" key={entry.id ?? index}>
+            <div className="flex items-center justify-between gap-2">
+              <Badge variant="outline">Answer {index + 1}</Badge>
+              <Button size="sm" variant="outline" onClick={() => onRemove(index)}>
+                <Trash2 className="size-3.5" />
+                Remove
+              </Button>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <ProfileInput
                 label="Question type"
@@ -1376,6 +1498,11 @@ function AnswerBankEditor({
                 onChange={(value) => onChange(index, "title", value)}
               />
             </div>
+            <ProfileInput
+              label="Tags"
+              value={formatTags(entry.tags)}
+              onChange={(value) => onChange(index, "tags", parseTags(value))}
+            />
             <label className="flex flex-col gap-2 text-sm">
               <span className="font-medium">Answer</span>
               <textarea
@@ -1389,6 +1516,17 @@ function AnswerBankEditor({
       </CardContent>
     </Card>
   );
+}
+
+function formatTags(tags: string[] | undefined): string {
+  return tags?.join(", ") ?? "";
+}
+
+function parseTags(value: string): string[] {
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
 }
 
 function ProfileInput({

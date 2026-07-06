@@ -67,6 +67,12 @@ export type DocumentRecord = {
   created_at?: string;
 };
 
+export type DocumentDeleteResult = {
+  id: string;
+  status: "deleted";
+  file_deleted: boolean;
+};
+
 export type Preferences = {
   final_submission_mode: "manual_only";
   fill_sensitive_fields: boolean;
@@ -163,6 +169,11 @@ export type AutomationEvent = {
   created_at: string;
 };
 
+export type EventHistoryClearResult = {
+  status: "cleared";
+  deleted_count: number;
+};
+
 export type ApplicationRecord = {
   id?: string;
   company_name: string;
@@ -179,6 +190,11 @@ export type ApplicationRecord = {
     signals: string[];
   };
   notes?: string;
+};
+
+export type ApplicationDeleteResult = {
+  id: string;
+  status: "deleted";
 };
 
 export type SuccessDetectionResult = {
@@ -301,6 +317,29 @@ export function getDemoApplicationUrl(): string {
   return url.toString();
 }
 
+export async function listEventHistory(
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<AutomationEvent[]> {
+  const url = new URL(`${API_BASE}/events/history`);
+  url.searchParams.set("limit", String(limit));
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Event history load failed: ${response.status}`);
+  }
+  return response.json() as Promise<AutomationEvent[]>;
+}
+
+export async function clearEventHistory(): Promise<EventHistoryClearResult> {
+  const response = await fetch(`${API_BASE}/events/history`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Event history clear failed: ${response.status}`);
+  }
+  return response.json() as Promise<EventHistoryClearResult>;
+}
+
 export async function getProfile(signal?: AbortSignal): Promise<Profile> {
   const response = await fetch(`${API_BASE}/profile`, { signal });
   if (!response.ok) {
@@ -405,6 +444,18 @@ export async function patchApplication(
   return response.json() as Promise<ApplicationRecord>;
 }
 
+export async function deleteApplication(
+  recordId: string,
+): Promise<ApplicationDeleteResult> {
+  const response = await fetch(`${API_BASE}/applications/${recordId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Application delete failed: ${response.status}`);
+  }
+  return response.json() as Promise<ApplicationDeleteResult>;
+}
+
 export async function importDocument(request: {
   kind: "resume" | "cover_letter" | "other";
   name: string;
@@ -419,6 +470,18 @@ export async function importDocument(request: {
     throw new Error(`Document import failed: ${response.status}`);
   }
   return response.json() as Promise<DocumentRecord>;
+}
+
+export async function deleteDocument(
+  documentId: string,
+): Promise<DocumentDeleteResult> {
+  const response = await fetch(`${API_BASE}/documents/${documentId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Document delete failed: ${response.status}`);
+  }
+  return response.json() as Promise<DocumentDeleteResult>;
 }
 
 export async function exportData(signal?: AbortSignal): Promise<DataExport> {

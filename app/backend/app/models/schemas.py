@@ -56,6 +56,12 @@ class DocumentRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class DocumentDeleteResult(BaseModel):
+    id: str
+    status: Literal["deleted"] = "deleted"
+    file_deleted: bool = False
+
+
 class AnswerBankEntry(BaseModel):
     id: str = Field(default_factory=lambda: new_id("answer"))
     question_type: str = "general"
@@ -209,6 +215,11 @@ class AutomationEvent(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class EventHistoryClearResult(BaseModel):
+    status: Literal["cleared"] = "cleared"
+    deleted_count: int = 0
+
+
 class SuccessDetection(BaseModel):
     confidence: float = 0.0
     signals: list[str] = Field(default_factory=list)
@@ -229,6 +240,11 @@ class ApplicationRecord(BaseModel):
     notes: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ApplicationDeleteResult(BaseModel):
+    id: str
+    status: Literal["deleted"] = "deleted"
 
 
 class SuccessDetectionResult(BaseModel):
