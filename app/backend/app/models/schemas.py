@@ -64,6 +64,30 @@ class AnswerBankEntry(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class AnswerBankSaveRequest(BaseModel):
+    question_type: str = "general"
+    title: str = ""
+    body: str
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("question_type", "title", "body")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("body")
+    @classmethod
+    def body_required(cls, value: str) -> str:
+        if not value:
+            raise ValueError("Answer body is required.")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def clean_tags(cls, value: list[str]) -> list[str]:
+        return [tag.strip() for tag in value if tag.strip()]
+
+
 class UserProfile(BaseModel):
     identity: Identity = Field(default_factory=Identity)
     links: Links = Field(default_factory=Links)

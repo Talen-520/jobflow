@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
+  type ApplicationRecord,
   type AnswerBankEntry,
   type DataExport,
   defaultPreferences,
@@ -39,7 +40,13 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-export function ProfilePage({ backendOnline }: { backendOnline: boolean }) {
+export function ProfilePage({
+  backendOnline,
+  onProfileUpdated,
+}: {
+  backendOnline: boolean;
+  onProfileUpdated?: (profile: Profile) => void;
+}) {
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [status, setStatus] = useState("Not saved");
   type FactListKey = "experience_facts" | "project_facts" | "skill_facts";
@@ -134,6 +141,7 @@ export function ProfilePage({ backendOnline }: { backendOnline: boolean }) {
     try {
       const saved = await putProfile(profile);
       setProfile(saved);
+      onProfileUpdated?.(saved);
       setStatus("Saved locally");
     } catch {
       setStatus("Backend unavailable");
@@ -302,6 +310,7 @@ export function FillPlansPage({
   formSchema,
   backendOnline = true,
   onReviewField,
+  onSaveReviewedAnswer,
 }: {
   fillPlan: FillPlan | null;
   fillResult: FillResult | null;
@@ -312,6 +321,13 @@ export function FillPlansPage({
     decision: FillPlanReviewDecision,
     value?: string | boolean | null,
   ) => void;
+  onSaveReviewedAnswer?: (request: {
+    fieldId: string;
+    title: string;
+    body: string;
+    questionType: string;
+    tags: string[];
+  }) => void;
 }) {
   const reviewCount = fillPlan?.items.filter((item) => item.needs_review).length ?? 0;
   const readyCount =
@@ -367,6 +383,7 @@ export function FillPlansPage({
                 disabled={!backendOnline}
                 fillPlan={fillPlan}
                 formSchema={formSchema}
+                onSaveReviewedAnswer={onSaveReviewedAnswer}
                 onReviewField={onReviewField}
               />
             </div>
@@ -474,7 +491,13 @@ export function FillPlansPage({
   );
 }
 
-export function DocumentsPage({ backendOnline }: { backendOnline: boolean }) {
+export function DocumentsPage({
+  backendOnline,
+  onProfileUpdated,
+}: {
+  backendOnline: boolean;
+  onProfileUpdated?: (profile: Profile) => void;
+}) {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [kind, setKind] = useState<"resume" | "cover_letter" | "other">("resume");
   const [name, setName] = useState("Main Resume");
@@ -489,6 +512,7 @@ export function DocumentsPage({ backendOnline }: { backendOnline: boolean }) {
     getProfile(controller.signal)
       .then((profile) => {
         setDocuments(profile.documents);
+        onProfileUpdated?.(profile);
         setStatus(`${profile.documents.length} documents stored locally.`);
       })
       .catch(() => setStatus("Unable to load local documents."));
@@ -507,7 +531,9 @@ export function DocumentsPage({ backendOnline }: { backendOnline: boolean }) {
         name: name.trim() || "Document",
         path,
       });
-      setDocuments((current) => [document, ...current]);
+      const updatedProfile = await getProfile();
+      setDocuments(updatedProfile.documents);
+      onProfileUpdated?.(updatedProfile);
       setStatus(`Imported ${document.name}.`);
     } catch {
       setStatus("Import failed. Check that the path exists on this machine.");
@@ -1504,29 +1530,231 @@ function SwitchRow({
   );
 }
 
-export function DashboardPage() {
+export function DashboardPage({
+  applications,
+  backendOnline,
+  fillPlan,
+  fillResult,
+  formSchema,
+  profile,
+}: {
+  applications: ApplicationRecord[];
+  backendOnline: boolean;
+  fillPlan: FillPlan | null;
+  fillResult: FillResult | null;
+  formSchema: FormSchema | null;
+  profile: Profile | null;
+}) {
+  const identityReady = Boolean(
+    profile?.identity.first_name && profile.identity.last_name && profile.identity.email,
+  );
+  const documentCount = profile?.documents.length ?? 0;
+  const answerCount = profile?.answer_bank.length ?? 0;
+  const factCount =
+    (profile?.experience_facts.length ?? 0) +
+    (profile?.project_facts.length ?? 0) +
+    (profile?.skill_facts.length ?? 0);
+  const submittedCount = applications.filter(
+    (application) => application.status === "applied",
+  ).length;
+  const draftCount = applications.filter(
+    (application) => application.status === "draft",
+  ).length;
+  const archivedCount = applications.filter(
+    (application) => application.status === "archived",
+  ).length;
+  const reviewCount = fillPlan?.items.filter((item) => item.needs_review).length ?? 0;
+  const blockedCount = fillPlan?.blocked_items.length ?? 0;
+  const latestApplication = applications[0];
+  const nextAction = dashboardNextAction({
+    answerCount,
+    backendOnline,
+    blockedCount,
+    documentCount,
+    factCount,
+    fillPlan,
+    formSchema,
+    identityReady,
+    reviewCount,
+  });
+
   return (
     <PageShell
       title="Dashboard"
       description="Local status summary for current job application work."
     >
       <div className="grid grid-cols-3 gap-4 max-[980px]:grid-cols-1">
-        {[
-          ["Local backend", "Profile and application APIs are ready.", CheckCircle2],
-          ["Manual submit", "Final employer submission stays user-controlled.", ShieldCheck],
-          ["Fact boundary", "Open answers must use stored user facts.", Database],
-        ].map(([title, description, Icon]) => (
-          <Card key={title as string}>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Icon />
-                <CardTitle>{title as string}</CardTitle>
-              </div>
-              <CardDescription>{description as string}</CardDescription>
-            </CardHeader>
-          </Card>
-        ))}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              {backendOnline ? <CheckCircle2 /> : <AlertTriangle />}
+              <CardTitle>Local Readiness</CardTitle>
+            </div>
+            <CardDescription>
+              {backendOnline
+                ? "Backend is online and local data is available."
+                : "Start the local backend before applying."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            <InfoLine label="Identity" value={identityReady ? "Ready" : "Incomplete"} />
+            <InfoLine label="Documents" value={`${documentCount}`} />
+            <InfoLine label="Answer bank" value={`${answerCount}`} />
+            <InfoLine label="Stored facts" value={`${factCount}`} />
+            <InfoLine
+              label="Work auth"
+              value={formatNullableBoolean(profile?.work_authorization.authorized ?? null)}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <FileText />
+              <CardTitle>Application History</CardTitle>
+            </div>
+            <CardDescription>
+              {latestApplication
+                ? `${latestApplication.company_name || "Unknown company"} · ${
+                    latestApplication.job_title || "Untitled role"
+                  }`
+                : "No saved application records yet."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            <InfoLine label="Total records" value={`${applications.length}`} />
+            <InfoLine label="Submitted" value={`${submittedCount}`} />
+            <InfoLine label="Draft" value={`${draftCount}`} />
+            <InfoLine label="Archived" value={`${archivedCount}`} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Database />
+              <CardTitle>Current Apply Run</CardTitle>
+            </div>
+            <CardDescription>{nextAction}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            <InfoLine label="Detected fields" value={`${formSchema?.fields.length ?? 0}`} />
+            <InfoLine label="Planned fields" value={`${fillPlan?.items.length ?? 0}`} />
+            <InfoLine label="Needs review" value={`${reviewCount}`} />
+            <InfoLine label="Blocked" value={`${blockedCount}`} />
+            <InfoLine label="Last filled" value={`${fillResult?.filled_count ?? 0}`} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-[1fr_360px] gap-4 max-[980px]:grid-cols-1">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <ShieldCheck />
+              <CardTitle>Safety Boundary</CardTitle>
+            </div>
+            <CardDescription>
+              JobFlow fills only source-backed fields and leaves final submission manual.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-3 gap-3 text-sm max-[760px]:grid-cols-1">
+            <SafetyTile
+              label="Manual submit"
+              value="Required"
+              description="No final employer submit click is automated."
+            />
+            <SafetyTile
+              label="Open answers"
+              value="Source-backed"
+              description="Generated text must come from saved user facts or presets."
+            />
+            <SafetyTile
+              label="Sensitive fields"
+              value="Review-gated"
+              description="Legal, EEO, salary, and low-confidence fields pause first."
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Next Best Action</CardTitle>
+            <CardDescription>{nextAction}</CardDescription>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            Keep profile facts concise and verified. When the assistant pauses, edit or
+            leave blank instead of guessing.
+          </CardContent>
+        </Card>
       </div>
     </PageShell>
   );
+}
+
+function SafetyTile({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 font-medium">{value}</div>
+      <p className="mt-2 text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+function dashboardNextAction({
+  answerCount,
+  backendOnline,
+  blockedCount,
+  documentCount,
+  factCount,
+  fillPlan,
+  formSchema,
+  identityReady,
+  reviewCount,
+}: {
+  answerCount: number;
+  backendOnline: boolean;
+  blockedCount: number;
+  documentCount: number;
+  factCount: number;
+  fillPlan: FillPlan | null;
+  formSchema: FormSchema | null;
+  identityReady: boolean;
+  reviewCount: number;
+}): string {
+  if (!backendOnline) {
+    return "Start the local FastAPI backend.";
+  }
+  if (!identityReady) {
+    return "Complete name and email in Profile.";
+  }
+  if (documentCount === 0) {
+    return "Import a resume into the document vault.";
+  }
+  if (answerCount === 0 && factCount === 0) {
+    return "Add answer-bank presets or verified experience facts.";
+  }
+  if (!formSchema) {
+    return "Open a job page and inspect the application form.";
+  }
+  if (!fillPlan) {
+    return "Create a source-backed fill plan for the detected form.";
+  }
+  if (reviewCount > 0) {
+    return "Review paused fields before the next safe fill.";
+  }
+  if (blockedCount > 0) {
+    return "Resolve blocked fields or intentionally leave them blank.";
+  }
+  return "Safe fields are ready; final submission still stays manual.";
 }

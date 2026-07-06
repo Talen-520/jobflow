@@ -61,18 +61,22 @@ import {
   getDemoApplicationUrl,
   getEventsUrl,
   getHealth,
+  getProfile,
   inspectForm,
   listApplications,
   openBrowser,
   patchApplication,
   reviewFillPlanField,
+  saveAnswerBankEntry,
   stopBrowser,
   type ApplicationRecord,
   type AutomationEvent,
+  type DocumentRecord,
   type FillPlan,
   type FillPlanReviewDecision,
   type FillResult,
   type FormSchema,
+  type Profile,
   type SuccessDetectionResult,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -121,6 +125,17 @@ const eventVariant = {
   error: "danger",
 } as const;
 
+type SaveReviewedAnswerRequest = {
+  fieldId: string;
+  title: string;
+  body: string;
+  questionType: string;
+  tags: string[];
+};
+
+const applicationRefreshEvents = new Set(["application.saved", "application.updated"]);
+const profileRefreshEvents = new Set(["document.imported", "profile.answer_saved"]);
+
 function App() {
   const [selectedNav, setSelectedNav] = useState("Applications");
   const [assistantState, setAssistantState] = useState<"idle" | "running" | "paused">(
@@ -137,6 +152,8 @@ function App() {
   const [successResult, setSuccessResult] = useState<SuccessDetectionResult | null>(null);
   const [successDraft, setSuccessDraft] = useState<ApplicationRecord | null>(null);
   const [savedApplications, setSavedApplications] = useState<ApplicationRecord[]>([]);
+  const [profileState, setProfileState] = useState<Profile | null>(null);
+  const [profileDocuments, setProfileDocuments] = useState<DocumentRecord[]>([]);
   const [eventLog, setEventLog] = useState<AutomationEvent[]>([]);
   const desktopAvailable = isDesktopRuntime();
 
@@ -156,6 +173,15 @@ function App() {
     listApplications(controller.signal)
       .then(setSavedApplications)
       .catch(() => setSavedApplications([]));
+    getProfile(controller.signal)
+      .then((profile) => {
+        setProfileState(profile);
+        setProfileDocuments(profile.documents);
+      })
+      .catch(() => {
+        setProfileState(null);
+        setProfileDocuments([]);
+      });
     return () => controller.abort();
   }, [backendStatus]);
 
@@ -170,6 +196,19 @@ function App() {
         setEventLog((current) => [event, ...current].slice(0, 8));
         if (event.message) {
           setAutomationMessage(event.message);
+        }
+        if (applicationRefreshEvents.has(event.event_type)) {
+          void listApplications()
+            .then(setSavedApplications)
+            .catch(() => undefined);
+        }
+        if (profileRefreshEvents.has(event.event_type)) {
+          void getProfile()
+            .then((profile) => {
+              setProfileState(profile);
+              setProfileDocuments(profile.documents);
+            })
+            .catch(() => undefined);
         }
       } catch {
         setAutomationMessage("Received an unreadable automation event.");
@@ -334,12 +373,52 @@ function App() {
     }
   };
 
+  const saveReviewedAnswer = async (request: SaveReviewedAnswerRequest) => {
+    if (!backendOnline) {
+      setAutomationMessage("Backend is offline. Start the local API first.");
+      return;
+    }
+    try {
+      const saved = await saveAnswerBankEntry({
+        question_type: request.questionType,
+        title: request.title,
+        body: request.body,
+        tags: request.tags,
+      });
+      setProfileState((current) =>
+        current
+          ? {
+              ...current,
+              answer_bank: [...current.answer_bank, saved],
+            }
+          : current,
+      );
+      setAutomationMessage(
+        `Saved "${saved.title || request.fieldId}" as a reusable preset answer.`,
+      );
+    } catch (error) {
+      setAutomationMessage(error instanceof Error ? error.message : "Answer save failed.");
+    }
+  };
+
   const updateSavedApplication = (updated: ApplicationRecord) => {
     setSavedApplications((current) =>
       current.map((application) =>
         application.id === updated.id ? updated : application,
       ),
     );
+  };
+
+  const addSavedApplication = (saved: ApplicationRecord) => {
+    setSavedApplications((current) => [
+      saved,
+      ...current.filter((application) => application.id !== saved.id),
+    ]);
+  };
+
+  const handleProfileUpdated = (profile: Profile) => {
+    setProfileState(profile);
+    setProfileDocuments(profile.documents);
   };
 
   const openFloatingAssistant = async () => {
@@ -364,6 +443,37 @@ function App() {
     }
   };
 
+  const startManualApplicationRecord = () => {
+    setSelectedNav("Applications");
+    setAutomationMessage("Create a local record with Manual Application Record.");
+  };
+
+  const goToDocumentImport = () => {
+    setSelectedNav("Documents");
+    setAutomationMessage("Import a resume or cover letter into the local vault.");
+  };
+
+  const openDemoApplication = async () => {
+    const demoUrl = getDemoApplicationUrl();
+    setSelectedNav("Applications");
+    setTargetUrl(demoUrl);
+    if (!backendOnline) {
+      setAutomationMessage("Backend is offline. Start the local API before opening demo.");
+      return;
+    }
+    setAutomationMessage("Opening local demo application...");
+    try {
+      const state = await openBrowser(demoUrl);
+      setAutomationMessage(
+        state.status === "error"
+          ? state.message || "Demo application failed to open."
+          : `Demo application opened: ${state.url}`,
+      );
+    } catch (error) {
+      setAutomationMessage(error instanceof Error ? error.message : "Demo open failed.");
+    }
+  };
+
   return (
     <main className="min-h-screen bg-background">
       <TopBar
@@ -373,20 +483,41 @@ function App() {
         onShowFloatingAssistant={openFloatingAssistant}
       />
       <div className="app-grid min-h-[calc(100vh-52px)]">
-        <Sidebar selectedNav={selectedNav} onSelect={setSelectedNav} />
+        <Sidebar
+          selectedNav={selectedNav}
+          onImportDocument={goToDocumentImport}
+          onNewApplication={startManualApplicationRecord}
+          onOpenDemo={() => void openDemoApplication()}
+          onSelect={setSelectedNav}
+        />
         <section className="flex min-w-0 flex-col gap-4 border-l border-border p-5">
-          {selectedNav === "Dashboard" ? <DashboardPage /> : null}
+          {selectedNav === "Dashboard" ? (
+            <DashboardPage
+              applications={savedApplications}
+              backendOnline={backendOnline}
+              fillPlan={fillPlan}
+              fillResult={fillResult}
+              formSchema={formSchema}
+              profile={profileState}
+            />
+          ) : null}
           {selectedNav === "Profile" ? (
-            <ProfilePage backendOnline={backendOnline} />
+            <ProfilePage
+              backendOnline={backendOnline}
+              onProfileUpdated={handleProfileUpdated}
+            />
           ) : null}
           {selectedNav === "Applications" ? (
             <ApplicationWorkspace
               applications={savedApplications}
+              documents={profileDocuments}
               fillPlan={fillPlan}
               fillResult={fillResult}
               formSchema={formSchema}
+              onApplicationCreated={addSavedApplication}
               onApplicationUpdated={updateSavedApplication}
               onReviewField={reviewCurrentField}
+              onSaveReviewedAnswer={saveReviewedAnswer}
             />
           ) : null}
           {selectedNav === "Fill Plans" ? (
@@ -396,10 +527,14 @@ function App() {
               fillResult={fillResult}
               formSchema={formSchema}
               onReviewField={reviewCurrentField}
+              onSaveReviewedAnswer={saveReviewedAnswer}
             />
           ) : null}
           {selectedNav === "Documents" ? (
-            <DocumentsPage backendOnline={backendOnline} />
+            <DocumentsPage
+              backendOnline={backendOnline}
+              onProfileUpdated={handleProfileUpdated}
+            />
           ) : null}
           {selectedNav === "Data Sources" ? (
             <DataSourcesPage backendOnline={backendOnline} />
@@ -417,6 +552,7 @@ function App() {
           onAutomationStep={runAutomationStep}
           onChatAdjust={runChatAdjustment}
           onReviewField={reviewCurrentField}
+          onSaveReviewedAnswer={saveReviewedAnswer}
           state={assistantState}
           successDraft={successDraft}
           successResult={successResult}
@@ -439,22 +575,28 @@ function App() {
 
 function ApplicationWorkspace({
   applications,
+  documents,
   fillPlan,
   fillResult,
   formSchema,
+  onApplicationCreated,
   onApplicationUpdated,
   onReviewField,
+  onSaveReviewedAnswer,
 }: {
   applications: ApplicationRecord[];
+  documents: DocumentRecord[];
   fillPlan: FillPlan | null;
   fillResult: FillResult | null;
   formSchema: FormSchema | null;
+  onApplicationCreated: (application: ApplicationRecord) => void;
   onApplicationUpdated: (application: ApplicationRecord) => void;
   onReviewField: (
     fieldId: string,
     decision: FillPlanReviewDecision,
     value?: string | boolean | null,
   ) => void;
+  onSaveReviewedAnswer: (request: SaveReviewedAnswerRequest) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   useEffect(() => {
@@ -488,17 +630,29 @@ function ApplicationWorkspace({
             fillResult={fillResult}
             formSchema={formSchema}
             onReviewField={onReviewField}
+            onSaveReviewedAnswer={onSaveReviewedAnswer}
           />
         </div>
       </Card>
       <div className="grid grid-cols-[1fr_380px] gap-4 max-[1180px]:grid-cols-1">
-        <ApplicationsTable
-          applications={applications}
-          selectedId={selectedApplication?.id ?? null}
-          onSelect={setSelectedId}
-        />
+        <div className="flex flex-col gap-4">
+          <ManualApplicationForm
+            documents={documents}
+            onCreated={(application) => {
+              onApplicationCreated(application);
+              setSelectedId(application.id ?? null);
+            }}
+          />
+          <ApplicationsTable
+            applications={applications}
+            documents={documents}
+            selectedId={selectedApplication?.id ?? null}
+            onSelect={setSelectedId}
+          />
+        </div>
         <ApplicationDetailPanel
           application={selectedApplication}
+          documents={documents}
           onApplicationUpdated={onApplicationUpdated}
         />
       </div>
@@ -567,9 +721,15 @@ function TopBar({
 }
 
 function Sidebar({
+  onImportDocument,
+  onNewApplication,
+  onOpenDemo,
   selectedNav,
   onSelect,
 }: {
+  onImportDocument: () => void;
+  onNewApplication: () => void;
+  onOpenDemo: () => void;
   selectedNav: string;
   onSelect: (value: string) => void;
 }) {
@@ -599,9 +759,15 @@ function Sidebar({
       <div className="flex flex-col gap-3 text-xs text-muted-foreground max-[1180px]:hidden">
         <div className="flex flex-col gap-2">
           <span className="font-medium uppercase tracking-wide">Quick Actions</span>
-          <button className="text-left hover:text-foreground">New Application</button>
-          <button className="text-left hover:text-foreground">Import Form / PDF</button>
-          <button className="text-left hover:text-foreground">Scan with OCR</button>
+          <button className="text-left hover:text-foreground" onClick={onNewApplication}>
+            New Application
+          </button>
+          <button className="text-left hover:text-foreground" onClick={onImportDocument}>
+            Import Document
+          </button>
+          <button className="text-left hover:text-foreground" onClick={onOpenDemo}>
+            Open Demo
+          </button>
         </div>
         <div className="flex flex-col gap-2">
           <span>Storage</span>
@@ -834,6 +1000,7 @@ function FieldReviewPanel({
   fillResult,
   formSchema,
   onReviewField,
+  onSaveReviewedAnswer,
 }: {
   fillPlan: FillPlan | null;
   fillResult: FillResult | null;
@@ -843,6 +1010,7 @@ function FieldReviewPanel({
     decision: FillPlanReviewDecision,
     value?: string | boolean | null,
   ) => void;
+  onSaveReviewedAnswer: (request: SaveReviewedAnswerRequest) => void;
 }) {
   const reviewItem =
     fillPlan?.items.find((item) => item.needs_review || item.confidence < 0.8) ??
@@ -901,6 +1069,7 @@ function FieldReviewPanel({
           <FillPlanReviewControls
             fillPlan={fillPlan}
             formSchema={formSchema}
+            onSaveReviewedAnswer={onSaveReviewedAnswer}
             onReviewField={onReviewField}
           />
         </>
@@ -913,15 +1082,150 @@ function FieldReviewPanel({
   );
 }
 
+function ManualApplicationForm({
+  documents,
+  onCreated,
+}: {
+  documents: DocumentRecord[];
+  onCreated: (application: ApplicationRecord) => void;
+}) {
+  const [companyName, setCompanyName] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [applicationDate, setApplicationDate] = useState(todayDate());
+  const [jobUrl, setJobUrl] = useState("");
+  const [ats, setAts] = useState("generic");
+  const [status, setStatus] = useState<ApplicationRecord["status"]>("draft");
+  const [resumeDocumentId, setResumeDocumentId] = useState("");
+  const [coverLetterDocumentId, setCoverLetterDocumentId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [message, setMessage] = useState("Create a local record when success detection is unavailable.");
+
+  const resumes = documents.filter((document) => document.kind === "resume");
+  const coverLetters = documents.filter((document) => document.kind === "cover_letter");
+
+  const createManualRecord = async () => {
+    if (!companyName.trim() || !jobTitle.trim()) {
+      setMessage("Company and role are required for a manual record.");
+      return;
+    }
+    setMessage("Saving manual application record...");
+    try {
+      const saved = await createApplication({
+        company_name: companyName.trim(),
+        job_title: jobTitle.trim(),
+        application_date: applicationDate || todayDate(),
+        job_url: jobUrl.trim(),
+        ats: ats.trim() || "generic",
+        status,
+        resume_document_id: resumeDocumentId,
+        cover_letter_document_id: coverLetterDocumentId,
+        notes,
+      });
+      onCreated(saved);
+      setCompanyName("");
+      setJobTitle("");
+      setApplicationDate(todayDate());
+      setJobUrl("");
+      setAts("generic");
+      setStatus("draft");
+      setResumeDocumentId("");
+      setCoverLetterDocumentId("");
+      setNotes("");
+      setMessage(`Saved manual record for ${saved.company_name || "this role"}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Manual record save failed.");
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-3">
+        <div>
+          <CardTitle>Manual Application Record</CardTitle>
+          <CardDescription>{message}</CardDescription>
+        </div>
+        <Badge variant="outline">Local only</Badge>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
+          <DetailInput label="Company" value={companyName} onChange={setCompanyName} />
+          <DetailInput label="Role" value={jobTitle} onChange={setJobTitle} />
+          <DetailInput
+            label="Date"
+            type="date"
+            value={applicationDate}
+            onChange={setApplicationDate}
+          />
+          <DetailInput label="ATS" value={ats} onChange={setAts} />
+        </div>
+        <DetailInput label="Job URL" type="url" value={jobUrl} onChange={setJobUrl} />
+        <div className="grid grid-cols-3 gap-3 max-[900px]:grid-cols-1">
+          <ApplicationSelect
+            label="Status"
+            value={status}
+            onChange={(value) => setStatus(value as ApplicationRecord["status"])}
+            options={[
+              { value: "draft", label: "Draft" },
+              { value: "applied", label: "Applied" },
+              { value: "archived", label: "Archived" },
+            ]}
+          />
+          <ApplicationSelect
+            label="Resume"
+            value={resumeDocumentId}
+            onChange={setResumeDocumentId}
+            options={[
+              { value: "", label: "No resume" },
+              ...resumes.map((document) => ({
+                value: document.id ?? "",
+                label: document.name || document.id || "Resume",
+              })),
+            ]}
+          />
+          <ApplicationSelect
+            label="Cover letter"
+            value={coverLetterDocumentId}
+            onChange={setCoverLetterDocumentId}
+            options={[
+              { value: "", label: "No cover letter" },
+              ...coverLetters.map((document) => ({
+                value: document.id ?? "",
+                label: document.name || document.id || "Cover letter",
+              })),
+            ]}
+          />
+        </div>
+        <label className="flex flex-col gap-2">
+          <span className="font-medium">Notes</span>
+          <textarea
+            className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+          />
+        </label>
+        <Button onClick={() => void createManualRecord()}>
+          Save Manual Record
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ApplicationsTable({
   applications,
+  documents,
   selectedId,
   onSelect,
 }: {
   applications: ApplicationRecord[];
+  documents: DocumentRecord[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "Submitted" | "Draft" | "Archived"
+  >("all");
   const rows = applications.map((application) => ({
     id: application.id ?? null,
     role: application.job_title || "Untitled role",
@@ -935,8 +1239,26 @@ function ApplicationsTable({
     date: application.application_date ?? "Saved locally",
     url: application.job_url || "-",
     ats: application.ats || "generic",
+    resume: documentDisplayValue(application.resume_document_id, documents),
     answers: applicationSnapshotAnswerCount(application.answers_snapshot),
   }));
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredRows = rows.filter((row) => {
+    const matchesStatus = statusFilter === "all" || row.status === statusFilter;
+    const searchText = [
+      row.role,
+      row.company,
+      row.date,
+      row.url,
+      row.ats,
+      row.status,
+      row.resume,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return matchesStatus && (!normalizedQuery || searchText.includes(normalizedQuery));
+  });
+  const filtersActive = Boolean(normalizedQuery) || statusFilter !== "all";
 
   return (
     <Card className="overflow-hidden">
@@ -948,11 +1270,39 @@ function ApplicationsTable({
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-2.5 text-muted-foreground" />
-            <Input className="w-72 pl-9" placeholder="Search applications..." />
+            <Input
+              className="w-72 pl-9"
+              placeholder="Search applications..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
           </div>
-          <Button variant="outline" size="icon">
-            <SlidersHorizontal />
-          </Button>
+          <label className="relative">
+            <SlidersHorizontal className="pointer-events-none absolute left-3 top-2.5 text-muted-foreground" />
+            <select
+              className="h-10 rounded-md border border-input bg-background pl-9 pr-8 text-sm"
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as typeof statusFilter)
+              }
+            >
+              <option value="all">All statuses</option>
+              <option value="Submitted">Submitted</option>
+              <option value="Draft">Draft</option>
+              <option value="Archived">Archived</option>
+            </select>
+          </label>
+          {filtersActive ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setQuery("");
+                setStatusFilter("all");
+              }}
+            >
+              Clear
+            </Button>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -965,27 +1315,35 @@ function ApplicationsTable({
               <th className="px-4 py-2 font-medium">URL</th>
               <th className="px-4 py-2 font-medium">ATS</th>
               <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Resume</th>
               <th className="px-4 py-2 font-medium">Answers</th>
               <th className="px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {applications.length === 0 ? (
               <tr>
-                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={8}>
+                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={9}>
                   No saved applications yet. Detect a success page after manual
                   submission, review the record, then save it here.
                 </td>
               </tr>
             ) : null}
-            {rows.map((row) => (
+            {applications.length > 0 && filteredRows.length === 0 ? (
+              <tr>
+                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={9}>
+                  No applications match the current search or status filter.
+                </td>
+              </tr>
+            ) : null}
+            {filteredRows.map((row) => (
               <tr
                 className={cn(
                   "border-t border-border",
                   row.id && row.id === selectedId ? "bg-muted/60" : "",
                   row.id ? "cursor-pointer hover:bg-muted/40" : "",
                 )}
-                key={`${row.company}-${row.role}`}
+                key={row.id ?? `${row.company}-${row.role}`}
                 onClick={() => onSelect(row.id)}
               >
                 <td className="px-4 py-3 font-medium">{row.role}</td>
@@ -999,6 +1357,9 @@ function ApplicationsTable({
                   <Badge variant={statusVariant[row.status as keyof typeof statusVariant]}>
                     {row.status}
                   </Badge>
+                </td>
+                <td className="max-w-40 truncate px-4 py-3 text-muted-foreground">
+                  {row.resume}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{row.answers}</td>
                 <td className="px-4 py-3">
@@ -1017,22 +1378,39 @@ function ApplicationsTable({
 
 function ApplicationDetailPanel({
   application,
+  documents,
   onApplicationUpdated,
 }: {
   application: ApplicationRecord | null;
+  documents: DocumentRecord[];
   onApplicationUpdated: (application: ApplicationRecord) => void;
 }) {
+  const [companyName, setCompanyName] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [applicationDate, setApplicationDate] = useState("");
+  const [jobUrl, setJobUrl] = useState("");
+  const [ats, setAts] = useState("generic");
   const [status, setStatus] = useState<ApplicationRecord["status"]>("applied");
   const [notes, setNotes] = useState("");
   const [saveState, setSaveState] = useState("Select an application.");
 
   useEffect(() => {
     if (!application) {
+      setCompanyName("");
+      setJobTitle("");
+      setApplicationDate("");
+      setJobUrl("");
+      setAts("generic");
       setStatus("applied");
       setNotes("");
       setSaveState("Select an application.");
       return;
     }
+    setCompanyName(application.company_name);
+    setJobTitle(application.job_title);
+    setApplicationDate(application.application_date ?? "");
+    setJobUrl(application.job_url);
+    setAts(application.ats || "generic");
     setStatus(application.status);
     setNotes(application.notes ?? "");
     setSaveState("Loaded from local application history.");
@@ -1045,7 +1423,15 @@ function ApplicationDetailPanel({
     }
     setSaveState("Saving...");
     try {
-      const updated = await patchApplication(application.id, { status, notes });
+      const updated = await patchApplication(application.id, {
+        company_name: companyName,
+        job_title: jobTitle,
+        application_date: applicationDate || application.application_date,
+        job_url: jobUrl,
+        ats: ats || "generic",
+        status,
+        notes,
+      });
       onApplicationUpdated(updated);
       setSaveState("Saved locally.");
     } catch {
@@ -1086,15 +1472,17 @@ function ApplicationDetailPanel({
       </CardHeader>
       <CardContent className="flex flex-col gap-4 text-sm">
         <div className="grid grid-cols-2 gap-3">
-          <InfoBlock label="Company" value={application.company_name || "Unknown"} />
-          <InfoBlock label="Role" value={application.job_title || "Untitled"} />
-          <InfoBlock label="Date" value={application.application_date ?? "-"} />
-          <InfoBlock label="ATS" value={application.ats || "generic"} />
+          <DetailInput label="Company" value={companyName} onChange={setCompanyName} />
+          <DetailInput label="Role" value={jobTitle} onChange={setJobTitle} />
+          <DetailInput
+            label="Date"
+            type="date"
+            value={applicationDate}
+            onChange={setApplicationDate}
+          />
+          <DetailInput label="ATS" value={ats} onChange={setAts} />
         </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted-foreground">Job URL</span>
-          <span className="break-all">{application.job_url || "-"}</span>
-        </div>
+        <DetailInput label="Job URL" type="url" value={jobUrl} onChange={setJobUrl} />
         <label className="flex flex-col gap-2">
           <span className="font-medium">Status</span>
           <select
@@ -1125,11 +1513,11 @@ function ApplicationDetailPanel({
           />
           <InfoBlock
             label="Resume document"
-            value={application.resume_document_id || "-"}
+            value={documentDisplayValue(application.resume_document_id, documents)}
           />
           <InfoBlock
             label="Cover letter"
-            value={application.cover_letter_document_id || "-"}
+            value={documentDisplayValue(application.cover_letter_document_id, documents)}
           />
         </div>
         <div className="flex flex-col gap-2">
@@ -1222,6 +1610,80 @@ function InfoBlock({ label, value }: { label: string; value: string }) {
   );
 }
 
+function DetailInput({
+  label,
+  type = "text",
+  value,
+  onChange,
+}: {
+  label: string;
+  type?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-2">
+      <span className="font-medium">{label}</span>
+      <Input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function ApplicationSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-2">
+      <span className="font-medium">{label}</span>
+      <select
+        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={`${label}-${option.value}`} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function todayDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function documentDisplayValue(
+  documentId: string | undefined,
+  documents: DocumentRecord[],
+): string {
+  if (!documentId) {
+    return "-";
+  }
+  const document = documents.find((item) => item.id === documentId);
+  if (!document) {
+    return `Unknown document (${documentId})`;
+  }
+  return document.name || fileNameFromPath(document.path) || document.id || documentId;
+}
+
+function fileNameFromPath(path: string | undefined): string {
+  if (!path) {
+    return "";
+  }
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
 function statusToLabel(status: ApplicationRecord["status"]): keyof typeof statusVariant {
   if (status === "applied") {
     return "Submitted";
@@ -1303,6 +1765,7 @@ function AssistantRail({
   onAutomationStep,
   onChatAdjust,
   onReviewField,
+  onSaveReviewedAnswer,
   state,
   successDraft,
   successResult,
@@ -1328,6 +1791,7 @@ function AssistantRail({
     decision: FillPlanReviewDecision,
     value?: string | boolean | null,
   ) => void;
+  onSaveReviewedAnswer: (request: SaveReviewedAnswerRequest) => void;
   state: "idle" | "running" | "paused";
   successDraft: ApplicationRecord | null;
   successResult: SuccessDetectionResult | null;
@@ -1456,6 +1920,7 @@ function AssistantRail({
             <FillPlanReviewControls
               fillPlan={fillPlan}
               formSchema={formSchema}
+              onSaveReviewedAnswer={onSaveReviewedAnswer}
               onReviewField={onReviewField}
             />
           </CardContent>

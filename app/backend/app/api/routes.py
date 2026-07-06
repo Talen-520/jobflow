@@ -7,6 +7,8 @@ from fastapi.responses import HTMLResponse
 
 from app.db.database import Database
 from app.models.schemas import (
+    AnswerBankEntry,
+    AnswerBankSaveRequest,
     ApplicationRecord,
     ApplyFillPlanRequest,
     BrowserState,
@@ -120,6 +122,37 @@ def get_profile(db: Database = Depends(get_database)) -> UserProfile:
 @router.put("/profile", response_model=UserProfile)
 def put_profile(profile: UserProfile, db: Database = Depends(get_database)) -> UserProfile:
     return db.put_profile(profile)
+
+
+@router.post("/profile/answer-bank", response_model=AnswerBankEntry)
+def save_answer_bank_entry(
+    request: AnswerBankSaveRequest,
+    db: Database = Depends(get_database),
+    event_bus: EventBus = Depends(get_event_bus),
+) -> AnswerBankEntry:
+    profile = db.get_profile()
+    entry = AnswerBankEntry(
+        question_type=request.question_type or "general",
+        title=request.title or "Reviewed answer",
+        body=request.body,
+        tags=request.tags,
+    )
+    profile.answer_bank.append(entry)
+    saved = UserProfile.model_validate(profile.model_dump(mode="json"))
+    db.put_profile(saved)
+    publish_event(
+        event_bus,
+        db,
+        "profile.answer_saved",
+        "Saved reusable answer to the local answer bank.",
+        "success",
+        {
+            "answer_id": entry.id,
+            "question_type": entry.question_type,
+            "tag_count": len(entry.tags),
+        },
+    )
+    return entry
 
 
 @router.get("/preferences", response_model=Preferences)

@@ -26,6 +26,8 @@ This repository contains the MVP scaffold:
 - Source-backed fill-plan services and safe fill execution.
 - Review-required and blocked fill-plan fields can be accepted, edited with
   user-provided values, or marked blank before another safe-fill run.
+- User-edited review answers for non-sensitive open text fields can be saved as
+  reusable answer-bank presets for later source-backed drafting.
 - Source-backed work authorization and sponsorship mapping from saved profile
   facts, with review required by default for sensitive fields.
 - Source-backed resume/cover-letter upload planning that only uses existing
@@ -40,6 +42,9 @@ This repository contains the MVP scaffold:
 - Settings controls for salary, relocation, missing-fact, and low-confidence
   fill-plan policies.
 - Live automation event stream for the assistant panel.
+- Main workspace refreshes local profile and application state from automation
+  events, so floating-assistant saves and document imports show up without a
+  manual reload.
 - Redacted automation event history so field values, chat text, HTML, file
   paths, and URL query strings are not written to local event logs.
 - Local demo application and submitted pages for manual end-to-end QA through
@@ -49,9 +54,17 @@ This repository contains the MVP scaffold:
   application record persistence.
 - Post-submit success detection with an editable structured record proposal
   before saving to application history.
-- Application history with selectable details, editable status, notes, success
-  signals, uploaded document IDs, answer snapshot counts, and compact
-  field-level source provenance.
+- Searchable application history with status filtering, selectable details,
+  editable company, role, date, URL, ATS, status, notes, success signals,
+  uploaded document names, answer snapshot counts, and compact field-level
+  source provenance.
+- Manual application record creation for cases where success detection is not
+  available or the user wants to log an application directly.
+- Dashboard summarizes live local readiness, profile completeness, document and
+  answer-bank counts, saved application stats, current fill-plan state, and next
+  best action, refreshing after profile saves and document imports.
+- Sidebar quick actions jump to manual application creation, document import,
+  and the local demo application.
 - Applications workspace stats, fill-plan table, and review panel are driven by
   current local app state instead of bundled sample rows.
 - Profile UI for identity, links, work authorization, answer bank entries, and

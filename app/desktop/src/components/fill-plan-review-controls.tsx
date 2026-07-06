@@ -14,18 +14,28 @@ type ReviewFieldHandler = (
   fieldId: string,
   decision: FillPlanReviewDecision,
   value?: string | boolean | null,
-) => void;
+) => Promise<void> | void;
+
+type SaveReviewedAnswerHandler = (request: {
+  fieldId: string;
+  title: string;
+  body: string;
+  questionType: string;
+  tags: string[];
+}) => Promise<void> | void;
 
 export function FillPlanReviewControls({
   fillPlan,
   formSchema,
   disabled = false,
   onReviewField,
+  onSaveReviewedAnswer,
 }: {
   fillPlan: FillPlan | null;
   formSchema: FormSchema | null;
   disabled?: boolean;
   onReviewField: ReviewFieldHandler;
+  onSaveReviewedAnswer?: SaveReviewedAnswerHandler;
 }) {
   const reviewItem =
     fillPlan?.items.find((item) => item.needs_review) ??
@@ -35,9 +45,11 @@ export function FillPlanReviewControls({
   const activeFieldId = reviewItem?.field_id ?? blockedItem?.field_id ?? "";
   const activeField = formSchema?.fields.find((field) => field.field_id === activeFieldId);
   const [editedValue, setEditedValue] = useState("");
+  const [saveAsReusableAnswer, setSaveAsReusableAnswer] = useState(false);
 
   useEffect(() => {
     setEditedValue(formatInitialValue(reviewItem?.value, activeField));
+    setSaveAsReusableAnswer(false);
   }, [activeField, activeFieldId, reviewItem?.value]);
 
   if (!activeFieldId) {
@@ -51,6 +63,24 @@ export function FillPlanReviewControls({
   const canAccept = Boolean(reviewItem);
   const canSubmitEdit = activeField?.type === "checkbox" || editedValue.trim().length > 0;
   const sourceRefs = reviewItem?.source_refs ?? [];
+  const canSaveReusableAnswer =
+    Boolean(onSaveReviewedAnswer) &&
+    canSubmitEdit &&
+    isReusableAnswerField(activeField, activeFieldId, editedValue);
+
+  const useEdit = async () => {
+    await onReviewField(activeFieldId, "edit", editedValue);
+    if (!saveAsReusableAnswer || !onSaveReviewedAnswer || !canSaveReusableAnswer) {
+      return;
+    }
+    await onSaveReviewedAnswer({
+      fieldId: activeFieldId,
+      title: activeField?.label || activeFieldId,
+      body: editedValue.trim(),
+      questionType: inferQuestionType(activeField, activeFieldId),
+      tags: ["reviewed", "application"],
+    });
+  };
 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border p-3">
@@ -83,6 +113,17 @@ export function FillPlanReviewControls({
       <p className="text-xs text-muted-foreground">
         {blockedItem?.reason ?? reviewItem?.reason ?? "User review required."}
       </p>
+      {canSaveReusableAnswer ? (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            checked={saveAsReusableAnswer}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) => setSaveAsReusableAnswer(event.target.checked)}
+          />
+          Save this edit as a reusable preset answer
+        </label>
+      ) : null}
       <div className="grid grid-cols-3 gap-2">
         <Button
           disabled={disabled || !canAccept}
@@ -95,7 +136,7 @@ export function FillPlanReviewControls({
         <Button
           disabled={disabled || !canSubmitEdit}
           size="sm"
-          onClick={() => onReviewField(activeFieldId, "edit", editedValue)}
+          onClick={() => void useEdit()}
         >
           Use Edit
         </Button>
@@ -110,6 +151,56 @@ export function FillPlanReviewControls({
       </div>
     </div>
   );
+}
+
+function isReusableAnswerField(
+  field: FormField | undefined,
+  fieldId: string,
+  value: string,
+): boolean {
+  if (!field || field.sensitive || value.trim().length < 8) {
+    return false;
+  }
+  if (!["text", "textarea", "unknown"].includes(field.type)) {
+    return false;
+  }
+  const text = `${fieldId} ${field.label} ${field.placeholder} ${field.helper_text}`.toLowerCase();
+  return ![
+    "address",
+    "authorized",
+    "citizen",
+    "disability",
+    "diversity",
+    "eeo",
+    "email",
+    "gender",
+    "legal",
+    "name",
+    "phone",
+    "race",
+    "relocation",
+    "salary",
+    "sponsorship",
+    "veteran",
+    "visa",
+  ].some((token) => text.includes(token));
+}
+
+function inferQuestionType(field: FormField | undefined, fieldId: string): string {
+  const text = `${fieldId} ${field?.label ?? ""} ${field?.placeholder ?? ""}`.toLowerCase();
+  if (text.includes("why") || text.includes("interest") || text.includes("motivation")) {
+    return "motivation";
+  }
+  if (text.includes("cover")) {
+    return "cover_letter";
+  }
+  if (text.includes("project")) {
+    return "project";
+  }
+  if (text.includes("experience") || text.includes("background")) {
+    return "experience";
+  }
+  return "general";
 }
 
 function ReviewValueInput({

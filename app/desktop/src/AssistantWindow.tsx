@@ -37,6 +37,7 @@ import {
   pauseAutomation,
   resumeAutomation,
   reviewFillPlanField,
+  saveAnswerBankEntry,
   stopBrowser,
   type ApplicationRecord,
   type AutomationEvent,
@@ -279,6 +280,26 @@ export function AssistantWindow() {
     }
   };
 
+  const saveReviewedAnswer = async (request: {
+    fieldId: string;
+    title: string;
+    body: string;
+    questionType: string;
+    tags: string[];
+  }) => {
+    try {
+      const saved = await saveAnswerBankEntry({
+        question_type: request.questionType,
+        title: request.title,
+        body: request.body,
+        tags: request.tags,
+      });
+      setMessage(`Saved "${saved.title || request.fieldId}" as a reusable answer.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Answer save failed.");
+    }
+  };
+
   return (
     <main className="flex min-h-screen flex-col bg-card text-foreground">
       <header
@@ -383,6 +404,7 @@ export function AssistantWindow() {
               <FillPlanReviewControls
                 fillPlan={fillPlan}
                 formSchema={formSchema}
+                onSaveReviewedAnswer={saveReviewedAnswer}
                 onReviewField={reviewField}
               />
             </CardContent>

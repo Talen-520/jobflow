@@ -188,6 +188,51 @@ def test_document_import_open_answer_and_data_export(tmp_path: Path) -> None:
     assert imported["profile"]["answer_bank"][0]["id"] == "answer_default"
 
 
+def test_save_reviewed_answer_bank_entry_is_reusable_and_event_safe(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+
+    response = client.post(
+        "/profile/answer-bank",
+        json={
+            "question_type": "motivation",
+            "title": "Why JobFlow",
+            "body": "I build local AI workflow tools from user-approved facts.",
+            "tags": ["ai", "workflow", ""],
+        },
+    )
+
+    assert response.status_code == 200
+    entry = response.json()
+    assert entry["id"].startswith("answer_")
+    assert entry["tags"] == ["ai", "workflow"]
+
+    profile = client.get("/profile").json()
+    assert profile["answer_bank"][0]["id"] == entry["id"]
+
+    draft_response = client.post(
+        "/automation/draft-open-answer",
+        json={
+            "question": "Why are you interested in AI workflow tools?",
+            "question_type": "motivation",
+            "keywords": ["ai", "workflow"],
+        },
+    )
+    assert draft_response.status_code == 200
+    draft = draft_response.json()
+    assert entry["id"] in draft["source_refs"][0]
+    assert "user-approved facts" in draft["answer"]
+
+    with client.websocket_connect("/events") as websocket:
+        event = websocket.receive_json()
+
+    serialized_event = json.dumps(event)
+    assert event["event_type"] == "profile.answer_saved"
+    assert event["payload"]["answer_id"] == entry["id"]
+    assert "user-approved facts" not in serialized_event
+
+
 def test_prompt_context_preview_endpoint(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
     profile = UserProfile(

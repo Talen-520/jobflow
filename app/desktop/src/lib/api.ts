@@ -52,6 +52,13 @@ export type AnswerBankEntry = {
   tags: string[];
 };
 
+export type AnswerBankSaveRequest = {
+  question_type?: string;
+  title?: string;
+  body: string;
+  tags?: string[];
+};
+
 export type DocumentRecord = {
   id?: string;
   kind: "resume" | "cover_letter" | "other";
@@ -312,6 +319,20 @@ export async function putProfile(profile: Profile): Promise<Profile> {
     throw new Error(`Profile save failed: ${response.status}`);
   }
   return response.json() as Promise<Profile>;
+}
+
+export async function saveAnswerBankEntry(
+  request: AnswerBankSaveRequest,
+): Promise<AnswerBankEntry> {
+  const response = await fetch(`${API_BASE}/profile/answer-bank`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw new Error(`Answer save failed: ${response.status}`);
+  }
+  return response.json() as Promise<AnswerBankEntry>;
 }
 
 export async function getPreferences(signal?: AbortSignal): Promise<Preferences> {
