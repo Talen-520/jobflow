@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
+from typing import Literal
 
 from app.models.schemas import DocumentImportRequest, DocumentRecord
 
@@ -23,6 +24,28 @@ class DocumentVaultService:
         )
         destination = self.vault_path / self._vault_filename(document, source)
         shutil.copy2(source, destination)
+        document.path = str(destination.resolve())
+        return document
+
+    def import_document_bytes(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        kind: Literal["resume", "cover_letter", "other"] = "resume",
+        name: str = "",
+    ) -> DocumentRecord:
+        if not content:
+            raise ValueError("Document upload is empty")
+
+        source = Path(filename or name or "document").name
+        self.vault_path.mkdir(parents=True, exist_ok=True)
+        document = DocumentRecord(
+            kind=kind,
+            name=name or source,
+        )
+        destination = self.vault_path / self._vault_filename(document, Path(source))
+        destination.write_bytes(content)
         document.path = str(destination.resolve())
         return document
 

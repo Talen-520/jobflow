@@ -94,6 +94,14 @@ DEMO_APPLICATION_HTML = """<!doctype html>
           LinkedIn profile
           <input id="linkedin" name="linkedin" type="url" />
         </label>
+        <label for="current_company">
+          Current company
+          <input id="current_company" name="current_company" />
+        </label>
+        <label for="university">
+          University
+          <input id="university" name="university" />
+        </label>
         <label for="resume">
           Resume
           <input id="resume" name="resume" type="file" required />
@@ -119,11 +127,125 @@ DEMO_APPLICATION_HTML = """<!doctype html>
             <option>No</option>
           </select>
         </label>
+        <label for="source">
+          Please tell us how you heard about this opportunity.
+          <textarea id="source" name="source"></textarea>
+        </label>
+        <label for="disability">
+          Disability status
+          <select id="disability" name="disability">
+            <option>Select one</option>
+            <option>Yes, I have a disability</option>
+            <option>No, I do not have a disability</option>
+            <option>I do not wish to answer</option>
+          </select>
+        </label>
+        <label for="veteran">
+          Veteran status
+          <select id="veteran" name="veteran">
+            <option>Select one</option>
+            <option>I am not a protected veteran</option>
+            <option>I identify as one or more classifications of protected veteran</option>
+            <option>I do not wish to answer</option>
+          </select>
+        </label>
         <label for="salary">
           Desired salary
           <input id="salary" name="salary" />
           <span class="hint">This should pause unless the salary policy allows it.</span>
         </label>
+        <button type="submit">Submit application manually</button>
+      </form>
+    </main>
+  </body>
+</html>
+"""
+
+
+DEMO_GREENHOUSE_APPLICATION_HTML = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Backend Engineer - Example Robotics</title>
+  </head>
+  <body data-ats="greenhouse">
+    <main id="main">
+      <p>Local Greenhouse-style JobFlow demo page.</p>
+      <h1>Backend Engineer</h1>
+      <form id="application_form" action="/demo/submitted" method="post" enctype="multipart/form-data">
+        <label for="first_name">First Name</label>
+        <input id="first_name" name="first_name" required />
+
+        <label for="last_name">Last Name</label>
+        <input id="last_name" name="last_name" required />
+
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" required />
+
+        <label for="phone">Phone</label>
+        <input id="phone" name="phone" type="tel" />
+
+        <fieldset>
+          <legend>Are you authorized to work in the United States?</legend>
+          <label for="authorized_yes">Yes</label>
+          <input id="authorized_yes" name="authorized" type="radio" value="Yes" />
+          <label for="authorized_no">No</label>
+          <input id="authorized_no" name="authorized" type="radio" value="No" />
+        </fieldset>
+
+        <label for="resume">Resume/CV</label>
+        <input id="resume" name="resume" type="file" required />
+
+        <label for="question_123">Why are you interested in this role?</label>
+        <textarea id="question_123" name="question_123"></textarea>
+
+        <button type="submit">Submit application manually</button>
+      </form>
+    </main>
+  </body>
+</html>
+"""
+
+
+DEMO_LEVER_APPLICATION_HTML = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Frontend Engineer - Example Analytics</title>
+  </head>
+  <body>
+    <main class="application-page">
+      <p>Local Lever-style JobFlow demo page.</p>
+      <h1>Frontend Engineer</h1>
+      <form class="application-form" action="/demo/submitted" method="post" enctype="multipart/form-data">
+        <label for="name">Full name</label>
+        <input id="name" name="name" required />
+
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" required />
+
+        <label for="phone">Phone</label>
+        <input id="phone" name="phone" type="tel" />
+
+        <fieldset>
+          <legend>Are you authorized to work in the United States?</legend>
+          <label for="authorized_yes">Yes</label>
+          <input id="authorized_yes" name="authorized" type="radio" value="Yes" />
+          <label for="authorized_no">No</label>
+          <input id="authorized_no" name="authorized" type="radio" value="No" />
+        </fieldset>
+
+        <label for="urls[LinkedIn]">LinkedIn</label>
+        <input id="urls[LinkedIn]" name="urls[LinkedIn]" />
+
+        <label for="resume">Resume</label>
+        <input id="resume" name="resume" type="file" required />
+
+        <label for="comments">Additional information</label>
+        <textarea id="comments" name="comments"></textarea>
+
         <button type="submit">Submit application manually</button>
       </form>
     </main>

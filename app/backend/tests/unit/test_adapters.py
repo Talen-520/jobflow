@@ -24,6 +24,8 @@ def test_registry_selects_greenhouse_and_extracts_form() -> None:
 
         assert adapter.name == "greenhouse"
         assert form.ats == "greenhouse"
+        assert form.company_name_hint == "Example Robotics"
+        assert form.job_title_hint == "Backend Engineer"
         assert {field.field_id for field in form.fields} >= {
             "first_name",
             "last_name",
@@ -64,6 +66,8 @@ def test_registry_selects_lever_and_fill_plan_handles_full_name() -> None:
 
         assert adapter.name == "lever"
         assert form.ats == "lever"
+        assert form.company_name_hint == "Example Analytics"
+        assert form.job_title_hint == "Frontend Engineer"
         full_name = next(item for item in plan.items if item.field_id == "name")
         assert full_name.value == "Tao Hu"
         assert full_name.selector == "#name"

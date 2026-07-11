@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -54,7 +54,12 @@ from app.services.event_bus import EventBus
 from app.services.fill_plan import FillPlanService
 from app.services.fill_plan_review import FillPlanReviewService
 from app.services.form_extraction import FormExtractionService
-from app.services.demo_pages import DEMO_APPLICATION_HTML, DEMO_SUBMITTED_HTML
+from app.services.demo_pages import (
+    DEMO_APPLICATION_HTML,
+    DEMO_GREENHOUSE_APPLICATION_HTML,
+    DEMO_LEVER_APPLICATION_HTML,
+    DEMO_SUBMITTED_HTML,
+)
 from app.services.prompt_context import PromptContextService
 from app.services.success_detection import SuccessDetectionService
 
@@ -103,6 +108,16 @@ def health() -> HealthResponse:
 @router.get("/demo/application", response_class=HTMLResponse)
 def demo_application_page() -> HTMLResponse:
     return HTMLResponse(DEMO_APPLICATION_HTML)
+
+
+@router.get("/demo/greenhouse/application", response_class=HTMLResponse)
+def demo_greenhouse_application_page() -> HTMLResponse:
+    return HTMLResponse(DEMO_GREENHOUSE_APPLICATION_HTML)
+
+
+@router.get("/demo/lever/application", response_class=HTMLResponse)
+def demo_lever_application_page() -> HTMLResponse:
+    return HTMLResponse(DEMO_LEVER_APPLICATION_HTML)
 
 
 @router.get("/demo/submitted", response_class=HTMLResponse)
@@ -192,6 +207,39 @@ def put_preferences(
     return db.put_preferences(preferences)
 
 
+def save_document_to_profile(
+    *,
+    document: DocumentRecord,
+    db: Database,
+    vault: DocumentVaultService,
+    event_bus: EventBus,
+) -> DocumentRecord:
+    profile = db.get_profile()
+    replaced_count = 0
+    if document.kind == "resume":
+        previous_resumes = [item for item in profile.documents if item.kind == "resume"]
+        replaced_count = len(previous_resumes)
+        for previous in previous_resumes:
+            vault.delete_document_file(previous)
+        profile.documents = [item for item in profile.documents if item.kind != "resume"]
+    profile.documents.append(document)
+    saved = UserProfile.model_validate(profile.model_dump(mode="json"))
+    db.put_profile(saved)
+    publish_event(
+        event_bus,
+        db,
+        "document.imported",
+        f"Imported {document.name} into the local vault.",
+        "success",
+        {
+            "document_id": document.id,
+            "kind": document.kind,
+            "replaced_count": replaced_count,
+        },
+    )
+    return document
+
+
 @router.get("/applications", response_model=list[ApplicationRecord])
 def list_applications(db: Database = Depends(get_database)) -> list[ApplicationRecord]:
     return db.list_applications()
@@ -275,23 +323,48 @@ def import_document(
     vault: DocumentVaultService = Depends(get_vault),
     event_bus: EventBus = Depends(get_event_bus),
 ) -> DocumentRecord:
-    profile = db.get_profile()
     try:
         document = vault.import_document(request)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Document path not found") from exc
-    profile.documents.append(document)
-    saved = UserProfile.model_validate(profile.model_dump(mode="json"))
-    db.put_profile(saved)
-    publish_event(
-        event_bus,
-        db,
-        "document.imported",
-        f"Imported {document.name} into the local vault.",
-        "success",
-        {"document_id": document.id, "kind": document.kind},
+    return save_document_to_profile(
+        document=document,
+        db=db,
+        vault=vault,
+        event_bus=event_bus,
     )
-    return document
+
+
+@router.post("/documents/upload", response_model=DocumentRecord)
+async def upload_document(
+    request: Request,
+    kind: Literal["resume", "cover_letter", "other"] = Query(default="resume"),
+    name: str = Query(default=""),
+    filename: str = Query(default=""),
+    db: Database = Depends(get_database),
+    vault: DocumentVaultService = Depends(get_vault),
+    event_bus: EventBus = Depends(get_event_bus),
+) -> DocumentRecord:
+    content = await request.body()
+    upload_name = name.strip()
+    upload_filename = filename.strip() or upload_name
+    if not upload_filename:
+        raise HTTPException(status_code=422, detail="Document filename is required")
+    try:
+        document = vault.import_document_bytes(
+            content=content,
+            filename=upload_filename,
+            kind=kind,
+            name=upload_name or upload_filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return save_document_to_profile(
+        document=document,
+        db=db,
+        vault=vault,
+        event_bus=event_bus,
+    )
 
 
 @router.delete("/documents/{document_id}", response_model=DocumentDeleteResult)

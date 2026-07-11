@@ -94,6 +94,8 @@ class BrowserController:
                 adapter_result.proposed_record.job_title = (
                     job_title_hint or adapter_result.proposed_record.job_title
                 )
+                if ats and ats != "generic":
+                    adapter_result.proposed_record.ats = ats
             return adapter_result
         request = SuccessDetectionRequest(
             url=self.current_url,

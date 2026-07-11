@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 
@@ -67,6 +69,7 @@ class FormExtractionService:
         parser = _HTMLFormParser()
         parser.feed(html)
         fields: list[FormField] = []
+        radio_fields: dict[str, FormField] = {}
         for index, control in enumerate(parser.controls):
             input_type = control.get("type", control["tag"]).lower()
             if input_type in {"hidden", "submit", "button", "reset"}:
@@ -83,6 +86,30 @@ class FormExtractionService:
                 or html_id
             )
             field_id = name or html_id or f"field_{index}"
+            if field_type == FieldType.radio:
+                radio_field = radio_fields.get(field_id)
+                option = self._radio_option(control, label)
+                if radio_field is None:
+                    radio_field = FormField(
+                        field_id=field_id,
+                        label=self._radio_group_label(field_id, label),
+                        type=FieldType.radio,
+                        required="required" in control,
+                        options=[],
+                        placeholder=control.get("placeholder", ""),
+                        helper_text=control.get("title", ""),
+                        selector=self._radio_group_selector(control, field_id),
+                        sensitive=self._looks_sensitive(f"{label} {field_id}"),
+                    )
+                    radio_fields[field_id] = radio_field
+                    fields.append(radio_field)
+                radio_field.required = radio_field.required or "required" in control
+                radio_field.sensitive = radio_field.sensitive or self._looks_sensitive(
+                    f"{label} {field_id}"
+                )
+                if option and option not in radio_field.options:
+                    radio_field.options.append(option)
+                continue
             fields.append(
                 FormField(
                     field_id=field_id,
@@ -96,7 +123,16 @@ class FormExtractionService:
                     sensitive=self._looks_sensitive(label),
                 )
             )
-        return FormSchema(url=url, ats=ats or self._detect_ats(url, html), fields=fields)
+        title = self._extract_tag_text(html, "title")
+        heading = self._extract_tag_text(html, "h1")
+        company_hint, title_hint = self._extract_record_hints(title, heading)
+        return FormSchema(
+            url=url,
+            ats=ats or self._detect_ats(url, html),
+            company_name_hint=company_hint,
+            job_title_hint=title_hint,
+            fields=fields,
+        )
 
     def _field_type(self, tag: str, input_type: str) -> FieldType:
         if tag == "textarea":
@@ -115,10 +151,30 @@ class FormExtractionService:
 
     def _selector(self, control: dict[str, Any], fallback: str) -> str:
         if control.get("id"):
-            return f"#{control['id']}"
+            html_id = control["id"]
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", html_id):
+                return f"#{html_id}"
+            return f"[id=\"{self._css_attr_value(html_id)}\"]"
         if control.get("name"):
-            return f"[name='{control['name']}']"
+            return f"[name=\"{self._css_attr_value(control['name'])}\"]"
         return f"[data-jobflow-field='{fallback}']"
+
+    def _radio_group_selector(self, control: dict[str, Any], fallback: str) -> str:
+        if control.get("name"):
+            return f"[name=\"{self._css_attr_value(control['name'])}\"]"
+        return self._selector(control, fallback)
+
+    def _radio_option(self, control: dict[str, Any], label: str) -> str:
+        return self._clean_text(control.get("value") or label)
+
+    def _radio_group_label(self, field_id: str, first_label: str) -> str:
+        cleaned = self._clean_text(first_label).lower()
+        if cleaned in {"yes", "no", "true", "false", "1", "0"}:
+            return field_id.replace("_", " ").replace("-", " ").strip()
+        return first_label
+
+    def _css_attr_value(self, value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
 
     def _detect_ats(self, url: str, html: str) -> str:
         haystack = f"{url} {html}".lower()
@@ -134,6 +190,46 @@ class FormExtractionService:
             return "oracle"
         return "generic"
 
+    def _extract_record_hints(self, title: str, heading: str) -> tuple[str, str]:
+        title = self._clean_text(title)
+        heading = self._clean_text(heading)
+        company = ""
+        job_title = ""
+        for delimiter in [" - ", " | ", " at "]:
+            if delimiter in title:
+                left, right = title.split(delimiter, 1)
+                job_title = self._clean_title_candidate(left)
+                company = self._clean_company_candidate(right)
+                break
+        if not job_title:
+            job_title = self._clean_title_candidate(heading or title)
+        return company, job_title
+
+    def _extract_tag_text(self, html: str, tag: str) -> str:
+        match = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", html, re.I | re.S)
+        if not match:
+            return ""
+        return self._clean_text(match.group(1))
+
+    def _clean_text(self, value: str) -> str:
+        without_tags = re.sub(r"<[^>]+>", " ", value)
+        return re.sub(r"\s+", " ", unescape(without_tags)).strip()
+
+    def _clean_title_candidate(self, value: str) -> str:
+        value = self._clean_text(value)
+        if value.lower() in {"application", "job application", "workday application"}:
+            return ""
+        return value
+
+    def _clean_company_candidate(self, value: str) -> str:
+        value = self._clean_text(value)
+        return re.sub(
+            r"\s+(careers?|jobs?|job board|applications?)$",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+
     def _looks_sensitive(self, label: str) -> bool:
         normalized = label.lower()
         return any(
@@ -146,6 +242,7 @@ class FormExtractionService:
                 "disability",
                 "sponsorship",
                 "visa",
+                "authorized",
                 "authorization",
                 "salary",
             ]

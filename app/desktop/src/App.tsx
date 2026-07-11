@@ -3,11 +3,9 @@ import {
   AlertTriangle,
   BriefcaseBusiness,
   CheckCircle2,
-  ClipboardList,
-  Database,
-  FileText,
   Home,
   Lock,
+  MonitorPlay,
   MoreVertical,
   Pause,
   Play,
@@ -18,6 +16,7 @@ import {
   Square,
   Trash2,
   User,
+  type LucideIcon,
 } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -35,9 +34,6 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   DashboardPage,
-  DataSourcesPage,
-  DocumentsPage,
-  FillPlansPage,
   ProfilePage,
   SettingsPage,
 } from "@/components/pages";
@@ -73,6 +69,7 @@ import {
   reviewFillPlanField,
   saveAnswerBankEntry,
   stopBrowser,
+  testApplicationLinks,
   type ApplicationRecord,
   type AutomationEvent,
   type DocumentRecord,
@@ -89,12 +86,15 @@ const navItems = [
   { label: "Dashboard", icon: Home },
   { label: "Profile", icon: User },
   { label: "Applications", icon: BriefcaseBusiness },
-  { label: "Fill Plans", icon: ClipboardList },
-  { label: "Documents", icon: FileText },
-  { label: "Data Sources", icon: Database },
-  { label: "Automation Rules", icon: ShieldCheck },
   { label: "Settings", icon: Settings },
 ];
+
+const sidebarTransition = {
+  type: "spring",
+  stiffness: 420,
+  damping: 34,
+  mass: 0.75,
+} as const;
 
 const confidenceVariant = {
   High: "success",
@@ -168,7 +168,7 @@ function mergeEventLog(
 }
 
 function App() {
-  const [selectedNav, setSelectedNav] = useState("Applications");
+  const [selectedNav, setSelectedNav] = useState("Profile");
   const [assistantState, setAssistantState] = useState<"idle" | "running" | "paused">(
     "idle",
   );
@@ -255,6 +255,29 @@ function App() {
   }, [backendStatus]);
 
   const backendOnline = backendStatus === "online";
+
+  const openJobUrl = async (url: string) => {
+    setTargetUrl(url);
+    if (!backendOnline) {
+      setAutomationMessage("Backend is offline. Start the local API first.");
+      return;
+    }
+
+    setAssistantState("running");
+    setAutomationMessage(`Opening ${url}`);
+    try {
+      const state = await openBrowser(url);
+      setAutomationMessage(
+        state.status === "error"
+          ? state.message || "Browser failed to start."
+          : `Browser opened: ${state.url}`,
+      );
+    } catch (error) {
+      setAutomationMessage(error instanceof Error ? error.message : "Browser open failed.");
+    } finally {
+      setAssistantState((current) => (current === "paused" ? "paused" : "idle"));
+    }
+  };
 
   const runAutomationStep = async (
     step: "open" | "inspect" | "plan" | "fill" | "success" | "save" | "stop",
@@ -495,54 +518,43 @@ function App() {
     }
   };
 
-  const startManualApplicationRecord = () => {
-    setSelectedNav("Applications");
-    setAutomationMessage("Create a local record with Manual Application Record.");
-  };
-
-  const goToDocumentImport = () => {
-    setSelectedNav("Documents");
-    setAutomationMessage("Import a resume or cover letter into the local vault.");
-  };
-
-  const openDemoApplication = async () => {
-    const demoUrl = getDemoApplicationUrl();
-    setSelectedNav("Applications");
-    setTargetUrl(demoUrl);
-    if (!backendOnline) {
-      setAutomationMessage("Backend is offline. Start the local API before opening demo.");
-      return;
-    }
-    setAutomationMessage("Opening local demo application...");
-    try {
-      const state = await openBrowser(demoUrl);
-      setAutomationMessage(
-        state.status === "error"
-          ? state.message || "Demo application failed to open."
-          : `Demo application opened: ${state.url}`,
-      );
-    } catch (error) {
-      setAutomationMessage(error instanceof Error ? error.message : "Demo open failed.");
-    }
-  };
-
   return (
-    <main className="min-h-screen bg-background">
-      <TopBar
-        backendStatus={backendStatus}
-        desktopAvailable={desktopAvailable}
-        onCollapseToAssistant={collapseMainWindow}
-        onShowFloatingAssistant={openFloatingAssistant}
-      />
-      <div className="app-grid min-h-[calc(100vh-52px)]">
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="app-grid min-h-screen">
         <Sidebar
+          backendStatus={backendStatus}
+          desktopAvailable={desktopAvailable}
           selectedNav={selectedNav}
-          onImportDocument={goToDocumentImport}
-          onNewApplication={startManualApplicationRecord}
-          onOpenDemo={() => void openDemoApplication()}
+          onCollapseToAssistant={collapseMainWindow}
           onSelect={setSelectedNav}
+          onShowFloatingAssistant={openFloatingAssistant}
         />
-        <section className="flex min-w-0 flex-col gap-4 border-l border-border p-5">
+        <section className="jobflow-main">
+          <div className="jobflow-main-inner">
+            <div className="jobflow-status-row">
+              <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+                <Lock className="size-4" />
+                <span className="truncate">All data is stored locally on this device.</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="success">Local Mode</Badge>
+                <Badge variant={backendStatus === "online" ? "success" : "outline"}>
+                  {backendStatus === "online"
+                    ? "Backend online"
+                    : backendStatus === "offline"
+                      ? "Backend offline"
+                      : "Checking backend"}
+                </Badge>
+                <Button
+                  disabled={!desktopAvailable}
+                  size="sm"
+                  variant="outline"
+                  onClick={openFloatingAssistant}
+                >
+                  Float Assistant
+                </Button>
+              </div>
+            </div>
           {selectedNav === "Dashboard" ? (
             <DashboardPage
               applications={savedApplications}
@@ -569,55 +581,16 @@ function App() {
               onApplicationCreated={addSavedApplication}
               onApplicationDeleted={removeSavedApplication}
               onApplicationUpdated={updateSavedApplication}
+              onOpenJobUrl={(url) => void openJobUrl(url)}
               onReviewField={reviewCurrentField}
               onSaveReviewedAnswer={saveReviewedAnswer}
             />
           ) : null}
-          {selectedNav === "Fill Plans" ? (
-            <FillPlansPage
-              backendOnline={backendOnline}
-              fillPlan={fillPlan}
-              fillResult={fillResult}
-              formSchema={formSchema}
-              onReviewField={reviewCurrentField}
-              onSaveReviewedAnswer={saveReviewedAnswer}
-            />
-          ) : null}
-          {selectedNav === "Documents" ? (
-            <DocumentsPage
-              backendOnline={backendOnline}
-              onProfileUpdated={handleProfileUpdated}
-            />
-          ) : null}
-          {selectedNav === "Data Sources" ? (
-            <DataSourcesPage backendOnline={backendOnline} />
-          ) : null}
-          {selectedNav === "Automation Rules" || selectedNav === "Settings" ? (
+          {selectedNav === "Settings" ? (
             <SettingsPage backendOnline={backendOnline} />
           ) : null}
+          </div>
         </section>
-        <AssistantRail
-          automationMessage={automationMessage}
-          events={eventLog}
-          fillPlan={fillPlan}
-          fillResult={fillResult}
-          formSchema={formSchema}
-          onAutomationStep={runAutomationStep}
-          onChatAdjust={runChatAdjustment}
-          onClearEvents={clearEvents}
-          onReviewField={reviewCurrentField}
-          onSaveReviewedAnswer={saveReviewedAnswer}
-          state={assistantState}
-          successDraft={successDraft}
-          successResult={successResult}
-          targetUrl={targetUrl}
-          onUseDemoUrl={() => setTargetUrl(getDemoApplicationUrl())}
-          onSuccessDraftChange={setSuccessDraft}
-          onTargetUrlChange={setTargetUrl}
-          onRun={() => setAssistantState("running")}
-          onPause={() => setAssistantState("paused")}
-          onStop={() => void runAutomationStep("stop")}
-        />
       </div>
       <FloatingAssistantButton
         state={assistantState}
@@ -636,6 +609,7 @@ function ApplicationWorkspace({
   onApplicationCreated,
   onApplicationDeleted,
   onApplicationUpdated,
+  onOpenJobUrl,
   onReviewField,
   onSaveReviewedAnswer,
 }: {
@@ -647,6 +621,7 @@ function ApplicationWorkspace({
   onApplicationCreated: (application: ApplicationRecord) => void;
   onApplicationDeleted: (recordId: string) => void;
   onApplicationUpdated: (application: ApplicationRecord) => void;
+  onOpenJobUrl: (url: string) => void;
   onReviewField: (
     fieldId: string,
     decision: FillPlanReviewDecision,
@@ -676,7 +651,15 @@ function ApplicationWorkspace({
   };
 
   return (
-    <>
+    <section className="flex flex-col gap-8">
+      <div className="flex flex-col gap-2">
+        <h1 className="font-heading scroll-m-20 text-4xl font-extrabold text-balance max-[760px]:text-3xl">
+          Applications
+        </h1>
+        <p className="max-w-3xl text-xl text-muted-foreground text-balance">
+          Inspect, review, and record job applications while keeping final submission manual.
+        </p>
+      </div>
       <StatsRow
         applications={applications}
         fillPlan={fillPlan}
@@ -698,6 +681,7 @@ function ApplicationWorkspace({
       </Card>
       <div className="grid grid-cols-[1fr_380px] gap-4 max-[1180px]:grid-cols-1">
         <div className="flex flex-col gap-4">
+          <LiveTestLinksCard onOpenJobUrl={onOpenJobUrl} />
           <ManualApplicationForm
             documents={documents}
             onCreated={(application) => {
@@ -719,7 +703,32 @@ function ApplicationWorkspace({
           onApplicationUpdated={onApplicationUpdated}
         />
       </div>
-    </>
+    </section>
+  );
+}
+
+function LiveTestLinksCard({ onOpenJobUrl }: { onOpenJobUrl: (url: string) => void }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Live Test Links</CardTitle>
+        <CardDescription>
+          Open real ATS application pages in the controlled browser for local manual QA.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid grid-cols-3 gap-2 max-[760px]:grid-cols-1">
+        {testApplicationLinks.map((link) => (
+          <Button
+            key={link.provider}
+            type="button"
+            variant="outline"
+            onClick={() => onOpenJobUrl(link.url)}
+          >
+            {link.label}
+          </Button>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -784,61 +793,104 @@ function TopBar({
 }
 
 function Sidebar({
-  onImportDocument,
-  onNewApplication,
-  onOpenDemo,
+  backendStatus,
+  desktopAvailable,
+  onCollapseToAssistant,
+  onShowFloatingAssistant,
   selectedNav,
   onSelect,
 }: {
-  onImportDocument: () => void;
-  onNewApplication: () => void;
-  onOpenDemo: () => void;
+  backendStatus: "checking" | "online" | "offline";
+  desktopAvailable: boolean;
+  onCollapseToAssistant: () => void;
+  onShowFloatingAssistant: () => void;
   selectedNav: string;
   onSelect: (value: string) => void;
 }) {
   return (
-    <aside className="flex flex-col justify-between bg-card p-3">
-      <nav className="flex flex-col gap-1">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const selected = item.label === selectedNav;
-          return (
-            <button
-              className={cn(
-                "flex h-10 items-center gap-3 rounded-md px-3 text-left text-sm transition-colors",
-                selected
-                  ? "bg-secondary font-medium text-primary"
-                  : "text-foreground hover:bg-secondary",
-              )}
-              key={item.label}
-              onClick={() => onSelect(item.label)}
-            >
-              <Icon />
-              <span className="max-[1180px]:hidden">{item.label}</span>
-            </button>
-          );
-        })}
-      </nav>
-      <div className="flex flex-col gap-3 text-xs text-muted-foreground max-[1180px]:hidden">
-        <div className="flex flex-col gap-2">
-          <span className="font-medium uppercase tracking-wide">Quick Actions</span>
-          <button className="text-left hover:text-foreground" onClick={onNewApplication}>
-            New Application
-          </button>
-          <button className="text-left hover:text-foreground" onClick={onImportDocument}>
-            Import Document
-          </button>
-          <button className="text-left hover:text-foreground" onClick={onOpenDemo}>
-            Open Demo
-          </button>
+    <aside className="jobflow-sidebar">
+      <div className="flex flex-col">
+        <nav className="flex flex-col gap-1.5">
+          {navItems.map((item) => {
+            const selected = item.label === selectedNav;
+            return (
+              <SidebarRowButton
+                icon={item.icon}
+                key={item.label}
+                label={item.label}
+                selected={selected}
+                onClick={() => onSelect(item.label)}
+              />
+            );
+          })}
+        </nav>
+      </div>
+      <div className="flex flex-col gap-3 max-[1180px]:hidden">
+        <div className="rounded-[18px] bg-[#f7f7f7] p-3 text-xs text-muted-foreground">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span>Local status</span>
+            <span className="font-medium text-foreground">
+              {backendStatus === "online" ? "Online" : "Offline"}
+            </span>
+          </div>
+          <Progress value={backendStatus === "online" ? 100 : 32} />
         </div>
-        <div className="flex flex-col gap-2">
-          <span>Storage</span>
-          <Progress value={18} />
-          <span>1.2 GB / 10 GB</span>
-        </div>
+        <SidebarRowButton
+          disabled={!desktopAvailable}
+          icon={MonitorPlay}
+          label="Float Assistant"
+          onClick={onShowFloatingAssistant}
+        />
+        <SidebarRowButton
+          disabled={!desktopAvailable}
+          icon={Square}
+          label="Collapse"
+          onClick={onCollapseToAssistant}
+        />
       </div>
     </aside>
+  );
+}
+
+function SidebarRowButton({
+  disabled,
+  icon: Icon,
+  label,
+  onClick,
+  selected = false,
+}: {
+  disabled?: boolean;
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  selected?: boolean;
+}) {
+  return (
+    <Button
+      aria-current={selected ? "page" : undefined}
+      aria-label={label}
+      className={cn(
+        "sidebar-row focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-inset",
+        selected ? "sidebar-row-selected" : "sidebar-row-muted",
+      )}
+      disabled={disabled}
+      title={label}
+      type="button"
+      variant="ghost"
+      onClick={onClick}
+    >
+      {selected ? (
+        <motion.span
+          className="sidebar-active-pill"
+          layoutId="sidebar-active-pill"
+          transition={sidebarTransition}
+        />
+      ) : null}
+      <span className="sidebar-row-content">
+        <Icon aria-hidden="true" data-icon="inline-start" />
+        <span className="max-[1180px]:hidden">{label}</span>
+      </span>
+    </Button>
   );
 }
 
@@ -903,7 +955,7 @@ function StatsRow({
             <CardContent className="flex items-center justify-between p-4">
               <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium">{card.label}</span>
-                <span className="text-3xl font-semibold tracking-tight">{card.value}</span>
+                <span className="text-3xl font-semibold">{card.value}</span>
                 <span className="text-xs text-muted-foreground">{card.hint}</span>
               </div>
               <Badge variant={card.variant}>
@@ -935,25 +987,28 @@ function WorkspaceHeader({
         </div>
         <Badge variant="warning">Manual submit only</Badge>
       </div>
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex gap-6 text-sm">
+      <div className="flex items-center justify-between gap-4 max-[760px]:flex-col max-[760px]:items-stretch">
+        <div className="flex min-w-0 gap-6 overflow-x-auto pb-1 text-sm">
           {["Fill Plan & Review", "Form Fields", "Profile Matches", "Attachments", "Notes"].map(
             (tab, index) => (
-              <button
+              <Button
                 className={cn(
-                  "border-b-2 py-2",
+                  "h-auto rounded-none border-b-2 px-0 py-2 text-sm",
                   index === 0
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
+                    ? "border-primary text-primary hover:bg-transparent"
+                    : "border-transparent text-muted-foreground hover:bg-transparent hover:text-foreground",
                 )}
                 key={tab}
+                size="sm"
+                type="button"
+                variant="ghost"
               >
                 {tab}
-              </button>
+              </Button>
             ),
           )}
         </div>
-        <span className="text-xs text-muted-foreground">
+        <span className="max-w-sm text-xs text-muted-foreground max-[760px]:max-w-none">
           {formSchema
             ? `${fillPlan?.items.length ?? 0} planned for ${formSchema.url || "current page"}`
             : "Open and inspect a job application page to populate this workspace."}
@@ -983,14 +1038,14 @@ function FillPlanPanel({
 
   return (
     <section className="flex flex-col gap-4 p-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 max-[760px]:flex-col">
         <div className="flex flex-col gap-1">
           <h2 className="text-base font-semibold">Fill Plan & Review</h2>
           <p className="text-sm text-muted-foreground">
             Current extracted fields, proposed values, confidence, and review state.
           </p>
         </div>
-        <div className="flex min-w-48 flex-col gap-1 text-xs text-muted-foreground">
+        <div className="flex min-w-48 flex-col gap-1 text-xs text-muted-foreground max-[760px]:w-full">
           <div className="flex justify-between">
             <span>Overall Progress</span>
             <span>{plannedFields} / {totalFields}</span>
@@ -1046,8 +1101,8 @@ function FillPlanPanel({
           current application page.
         </div>
       )}
-      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <div className="flex gap-4">
+      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground max-[760px]:flex-col max-[760px]:items-start">
+        <div className="flex flex-wrap gap-4">
           <span>High (80-100%)</span>
           <span>Medium (50-79%)</span>
           <span>Low (0-49%)</span>
@@ -1325,25 +1380,25 @@ function ApplicationsTable({
 
   return (
     <Card className="overflow-hidden">
-      <CardHeader className="flex-row items-center justify-between p-4">
+      <CardHeader className="flex-row items-center justify-between p-4 max-[760px]:flex-col max-[760px]:items-stretch">
         <div>
           <CardTitle>Application History</CardTitle>
           <CardDescription>Saved after manual submission confirmation.</CardDescription>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="flex items-center gap-2 max-[760px]:flex-col max-[760px]:items-stretch">
+          <div className="relative max-[760px]:w-full">
             <Search className="pointer-events-none absolute left-3 top-2.5 text-muted-foreground" />
             <Input
-              className="w-72 pl-9"
+              className="w-72 pl-9 max-[760px]:w-full"
               placeholder="Search applications..."
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
           </div>
-          <label className="relative">
+          <label className="relative max-[760px]:w-full">
             <SlidersHorizontal className="pointer-events-none absolute left-3 top-2.5 text-muted-foreground" />
             <select
-              className="h-10 rounded-md border border-input bg-background pl-9 pr-8 text-sm"
+              className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-8 text-sm"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as typeof statusFilter)
@@ -1368,8 +1423,8 @@ function ApplicationsTable({
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className="p-0">
-        <table className="w-full border-collapse text-sm">
+      <CardContent className="overflow-x-auto p-0">
+        <table className="min-w-[760px] border-collapse text-sm">
           <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
             <tr>
               <th className="px-4 py-2 font-medium">Job Title</th>
@@ -2257,7 +2312,7 @@ function ProfileLikeInput({
 }) {
   return (
     <label className="flex flex-col gap-1.5 text-sm">
-      <span className="font-medium">{label}</span>
+      <span className="leading-none font-medium">{label}</span>
       <Input value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
@@ -2271,14 +2326,25 @@ function FloatingAssistantButton({
   onRun: () => void;
 }) {
   return (
-    <motion.button
+    <motion.div
       animate={{ scale: state === "running" ? 1.03 : 1 }}
-      className="fixed bottom-5 right-5 hidden size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg max-[1180px]:flex"
-      onClick={onRun}
+      className="fixed bottom-6 right-6 z-30"
       whileTap={{ scale: 0.96 }}
     >
-      {state === "running" ? <Pause /> : <Play />}
-    </motion.button>
+      <Button
+        aria-label="Open floating assistant"
+        className="size-[52px] rounded-full shadow-[0_18px_50px_rgb(0_0_0_/_18%)]"
+        size="icon"
+        type="button"
+        onClick={onRun}
+      >
+        {state === "running" ? (
+          <Pause data-icon="inline-start" />
+        ) : (
+          <Play data-icon="inline-start" />
+        )}
+      </Button>
+    </motion.div>
   );
 }
 

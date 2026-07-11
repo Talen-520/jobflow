@@ -39,6 +39,7 @@ import {
   reviewFillPlanField,
   saveAnswerBankEntry,
   stopBrowser,
+  testApplicationLinks,
   type ApplicationRecord,
   type AutomationEvent,
   type FillPlan,
@@ -114,6 +115,11 @@ export function AssistantWindow() {
         item.source_refs.length > 0 &&
         item.value !== null,
     ).length ?? 0;
+  const reviewQueueCount =
+    (fillPlan?.items.filter((item) => item.needs_review || item.confidence < 0.8)
+      .length ?? 0) + (fillPlan?.blocked_items.length ?? 0);
+  const sourceBackedCount =
+    fillPlan?.items.filter((item) => item.source_refs.length > 0).length ?? 0;
 
   const runSafeFlow = async () => {
     if (backendStatus !== "online") {
@@ -317,10 +323,10 @@ export function AssistantWindow() {
         </div>
         <div className="flex items-center gap-1">
           <Button size="icon" variant="ghost" onClick={() => void showMainWindow()}>
-            <ArrowUpRight />
+            <ArrowUpRight data-icon="inline-start" />
           </Button>
           <Button size="icon" variant="ghost" onClick={() => void hideFloatingAssistant()}>
-            <X />
+            <X data-icon="inline-start" />
           </Button>
         </div>
       </header>
@@ -351,6 +357,18 @@ export function AssistantWindow() {
                 Demo
               </Button>
             </div>
+            <div className="grid grid-cols-3 gap-2">
+              {testApplicationLinks.map((link) => (
+                <Button
+                  key={link.provider}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setTargetUrl(link.url)}
+                >
+                  {link.provider}
+                </Button>
+              ))}
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <Button disabled={running} onClick={() => void runSafeFlow()}>
                 <Play data-icon="inline-start" />
@@ -374,7 +392,7 @@ export function AssistantWindow() {
         <div className="grid grid-cols-3 gap-2 text-center text-xs">
           <Metric label="Fields" value={`${formSchema?.fields.length ?? 0}`} />
           <Metric label="Safe" value={`${fillResult?.filled_count ?? safeFillCount}`} />
-          <Metric label="Blocked" value={`${fillPlan?.blocked_items.length ?? 0}`} />
+          <Metric label="Review" value={`${reviewQueueCount}`} />
         </div>
         <Progress value={fillResult ? Math.min(100, fillResult.filled_count * 12) : 20} />
 
@@ -389,10 +407,13 @@ export function AssistantWindow() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2 p-3 pt-0 text-sm">
             <InfoLine label="Planned" value={`${fillPlan?.items.length ?? 0}`} />
-            <InfoLine label="Needs review" value={`${fillResult?.review_count ?? 0}`} />
+            <InfoLine label="Source-backed" value={`${sourceBackedCount}`} />
+            <InfoLine label="Needs review" value={`${reviewQueueCount}`} />
             <InfoLine label="Errors" value={`${fillResult?.error_count ?? 0}`} />
           </CardContent>
         </Card>
+
+        {fillPlan ? <PlanAuditCard fillPlan={fillPlan} formSchema={formSchema} /> : null}
 
         {fillPlan ? (
           <Card>
@@ -484,7 +505,7 @@ export function AssistantWindow() {
               }}
             />
             <Button size="icon" onClick={() => void sendChatMessage()}>
-              <Send />
+              <Send data-icon="inline-start" />
             </Button>
           </CardContent>
         </Card>
@@ -534,6 +555,152 @@ function InfoLine({ label, value }: { label: string; value: string }) {
       <span className="font-medium">{value}</span>
     </div>
   );
+}
+
+function PlanAuditCard({
+  fillPlan,
+  formSchema,
+}: {
+  fillPlan: FillPlan;
+  formSchema: FormSchema | null;
+}) {
+  const reviewItems = fillPlan.items.filter(
+    (item) => item.needs_review || item.confidence < 0.8,
+  );
+  const sourceBackedItems = fillPlan.items.filter(
+    (item) => item.source_refs.length > 0,
+  );
+  const fillWithoutSources = fillPlan.items.filter(
+    (item) =>
+      item.action !== "skip" &&
+      item.value !== null &&
+      item.value !== "" &&
+      item.source_refs.length === 0,
+  );
+
+  return (
+    <Card>
+      <CardHeader className="p-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Plan Audit</CardTitle>
+          <Badge variant={fillWithoutSources.length ? "danger" : "success"}>
+            {fillWithoutSources.length ? "Check sources" : "Source gated"}
+          </Badge>
+        </div>
+        <CardDescription>
+          Review why fields pause and which proposed values have local sources.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 p-3 pt-0 text-sm">
+        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <Metric label="Sources" value={`${sourceBackedItems.length}`} />
+          <Metric label="Review" value={`${reviewItems.length}`} />
+          <Metric label="Blocked" value={`${fillPlan.blocked_items.length}`} />
+        </div>
+
+        {fillWithoutSources.length > 0 ? (
+          <div className="rounded-md border border-border p-2 text-xs">
+            <div className="font-medium">Values without source refs</div>
+            <div className="mt-1 text-muted-foreground">
+              {fillWithoutSources
+                .slice(0, 3)
+                .map((item) => item.field_id)
+                .join(", ")}
+            </div>
+          </div>
+        ) : null}
+
+        <AuditList
+          emptyText="No blocked fields."
+          items={fillPlan.blocked_items.slice(0, 3).map((item) => ({
+            id: item.field_id,
+            title: fieldLabel(formSchema, item.field_id),
+            detail: item.reason,
+            badge: "Blocked",
+            badgeVariant: "danger" as const,
+            sourceRefs: [],
+          }))}
+          overflowCount={Math.max(0, fillPlan.blocked_items.length - 3)}
+        />
+
+        <AuditList
+          emptyText="No fields currently require review."
+          items={reviewItems.slice(0, 3).map((item) => ({
+            id: item.field_id,
+            title: fieldLabel(formSchema, item.field_id),
+            detail: item.reason,
+            badge: `${Math.round(item.confidence * 100)}%`,
+            badgeVariant: "warning" as const,
+            sourceRefs: item.source_refs,
+          }))}
+          overflowCount={Math.max(0, reviewItems.length - 3)}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function AuditList({
+  emptyText,
+  items,
+  overflowCount,
+}: {
+  emptyText: string;
+  items: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    badge: string;
+    badgeVariant: "danger" | "warning";
+    sourceRefs: string[];
+  }>;
+  overflowCount: number;
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+        {emptyText}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {items.map((item) => (
+        <div className="rounded-md border border-border p-2 text-xs" key={item.id}>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate font-medium">{item.title}</div>
+              <div className="truncate text-muted-foreground">{item.detail}</div>
+            </div>
+            <Badge variant={item.badgeVariant}>{item.badge}</Badge>
+          </div>
+          {item.sourceRefs.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {item.sourceRefs.slice(0, 2).map((sourceRef) => (
+                <Badge key={sourceRef} variant="outline">
+                  {sourceRef}
+                </Badge>
+              ))}
+              {item.sourceRefs.length > 2 ? (
+                <Badge variant="outline">+{item.sourceRefs.length - 2}</Badge>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ))}
+      {overflowCount > 0 ? (
+        <div className="text-xs text-muted-foreground">
+          {overflowCount} more items hidden in this compact view.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function fieldLabel(formSchema: FormSchema | null, fieldId: string): string {
+  const field = formSchema?.fields.find((item) => item.field_id === fieldId);
+  return field?.label || fieldId;
 }
 
 function CompactInput({

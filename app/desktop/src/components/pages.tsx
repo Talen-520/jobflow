@@ -1,14 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   Database,
   FileText,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
 
-import { FillPlanReviewControls } from "@/components/fill-plan-review-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,32 +19,91 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   type ApplicationRecord,
-  type AnswerBankEntry,
   type DataExport,
   defaultPreferences,
   deleteDocument,
-  draftOpenAnswer,
   emptyProfile,
   exportData,
-  type Fact,
-  type DocumentRecord,
   type FillPlan,
-  type FillPlanReviewDecision,
   type FillResult,
   type FormSchema,
   getPreferences,
-  getPromptContextPreview,
   getProfile,
   importData,
-  importDocument,
-  type OpenAnswerDraft,
   type Preferences,
-  type PromptContextPreview,
   type Profile,
   putPreferences,
   putProfile,
+  uploadDocument,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+type ModelOption = {
+  value: string;
+  label: string;
+};
+
+const AI_PROVIDER_OPTIONS: Array<{
+  value: Preferences["ai_provider"];
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "ollama",
+    label: "Ollama",
+    description: "Use a local Ollama model and enter the local model name manually.",
+  },
+  {
+    value: "deepseek",
+    label: "DeepSeek",
+    description: "Use DeepSeek API models from the current official model list.",
+  },
+  {
+    value: "openai",
+    label: "OpenAI",
+    description: "Use OpenAI API models from the current official model list.",
+  },
+  {
+    value: "gemini",
+    label: "Gemini",
+    description: "Use Gemini API models from the current official model list.",
+  },
+];
+
+const API_MODEL_OPTIONS: Partial<Record<Preferences["ai_provider"], ModelOption[]>> = {
+  deepseek: [
+    { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+    { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
+  ],
+  openai: [
+    { value: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+  ],
+  gemini: [
+    { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+    { value: "gemini-3.1-pro", label: "Gemini 3.1 Pro" },
+    { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
+    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+    { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
+  ],
+};
+
+const DEFAULT_MODEL_BY_PROVIDER: Record<Preferences["ai_provider"], string> = {
+  ollama: "llama3.1:8b",
+  deepseek: "deepseek-v4-flash",
+  openai: "gpt-5.6-terra",
+  gemini: "gemini-3.5-flash",
+  custom: "",
+};
+
+const DEFAULT_BASE_URL_BY_PROVIDER: Partial<Record<Preferences["ai_provider"], string>> = {
+  ollama: "http://127.0.0.1:11434",
+  deepseek: "https://api.deepseek.com",
+  openai: "https://api.openai.com/v1",
+  gemini: "https://generativelanguage.googleapis.com",
+};
 
 export function ProfilePage({
   backendOnline,
@@ -56,27 +113,71 @@ export function ProfilePage({
   onProfileUpdated?: (profile: Profile) => void;
 }) {
   const [profile, setProfile] = useState<Profile>(emptyProfile);
-  const [status, setStatus] = useState("Not saved");
-  type FactListKey = "education" | "experience_facts" | "project_facts" | "skill_facts";
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [status, setStatus] = useState("Not loaded");
+  const [resumeName, setResumeName] = useState("Resume");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastSavedProfileRef = useRef("");
+  const resumeDocument = profile.documents.find((document) => document.kind === "resume");
 
   useEffect(() => {
     if (!backendOnline) {
+      setProfileLoaded(false);
       return;
     }
     const controller = new AbortController();
     getProfile(controller.signal)
       .then((loaded) => {
+        lastSavedProfileRef.current = JSON.stringify(loaded);
         setProfile(loaded);
-        setStatus("Loaded from local backend");
+        setProfileLoaded(true);
+        setStatus("Loaded. Changes auto-save.");
       })
-      .catch(() => setStatus("Using local draft"));
+      .catch(() => {
+        lastSavedProfileRef.current = JSON.stringify(emptyProfile);
+        setProfileLoaded(true);
+        setStatus("Using local draft. Changes auto-save when backend is available.");
+      });
     return () => controller.abort();
   }, [backendOnline]);
+
+  useEffect(() => {
+    if (!backendOnline || !profileLoaded) {
+      return;
+    }
+
+    const serialized = JSON.stringify(profile);
+    if (serialized === lastSavedProfileRef.current) {
+      return;
+    }
+
+    setStatus("Auto-saving...");
+    const timeout = window.setTimeout(() => {
+      void putProfile(profile)
+        .then((saved) => {
+          lastSavedProfileRef.current = JSON.stringify(saved);
+          setProfile(saved);
+          onProfileUpdated?.(saved);
+          setStatus("Saved locally");
+        })
+        .catch(() => setStatus("Auto-save failed. Backend unavailable."));
+    }, 700);
+
+    return () => window.clearTimeout(timeout);
+  }, [backendOnline, onProfileUpdated, profile, profileLoaded]);
 
   const updateIdentity = (key: keyof Profile["identity"], value: string) => {
     setProfile((current) => ({
       ...current,
       identity: { ...current.identity, [key]: value },
+    }));
+  };
+
+  const updateFullName = (value: string) => {
+    const names = splitFullName(value);
+    setProfile((current) => ({
+      ...current,
+      identity: { ...current.identity, ...names },
     }));
   };
 
@@ -97,110 +198,77 @@ export function ProfilePage({
     }));
   };
 
-  const addFact = (key: FactListKey) => {
+  const updatePreference = (key: string, value: string) => {
     setProfile((current) => ({
       ...current,
-      [key]: [
-        ...current[key],
-        { title: "", body: "", tags: [], source: "user" },
-      ],
+      preferences: { ...current.preferences, [key]: value },
     }));
   };
 
-  const updateFact = (
-    key: FactListKey,
-    index: number,
-    field: keyof Pick<Fact, "title" | "body" | "tags">,
-    value: string | string[],
-  ) => {
-    setProfile((current) => ({
-      ...current,
-      [key]: current[key].map((fact, factIndex) =>
-        factIndex === index ? { ...fact, [field]: value } : fact,
-      ),
-    }));
-  };
-
-  const removeFact = (key: FactListKey, index: number) => {
-    setProfile((current) => ({
-      ...current,
-      [key]: current[key].filter((_, factIndex) => factIndex !== index),
-    }));
-  };
-
-  const addAnswer = () => {
-    setProfile((current) => ({
-      ...current,
-      answer_bank: [
-        ...current.answer_bank,
-        { question_type: "general", title: "", body: "", tags: [] },
-      ],
-    }));
-  };
-
-  const updateAnswer = (
-    index: number,
-    field: keyof Pick<AnswerBankEntry, "question_type" | "title" | "body" | "tags">,
-    value: string | string[],
-  ) => {
-    setProfile((current) => ({
-      ...current,
-      answer_bank: current.answer_bank.map((answer, answerIndex) =>
-        answerIndex === index ? { ...answer, [field]: value } : answer,
-      ),
-    }));
-  };
-
-  const removeAnswer = (index: number) => {
-    setProfile((current) => ({
-      ...current,
-      answer_bank: current.answer_bank.filter((_, answerIndex) => answerIndex !== index),
-    }));
-  };
-
-  const save = async () => {
-    setStatus("Saving...");
+  const uploadResume = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    setStatus("Uploading resume...");
     try {
-      const saved = await putProfile(profile);
-      setProfile(saved);
-      onProfileUpdated?.(saved);
-      setStatus("Saved locally");
+      const document = await uploadDocument(file, {
+        kind: "resume",
+        name: resumeName.trim() || file.name,
+      });
+      const updated = await getProfile();
+      lastSavedProfileRef.current = JSON.stringify(updated);
+      setProfile(updated);
+      onProfileUpdated?.(updated);
+      setResumeName(document.name || file.name);
+      setStatus("Resume replaced locally");
     } catch {
-      setStatus("Backend unavailable");
+      setStatus("Resume upload failed");
+    }
+  };
+
+  const handleResumeFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    void uploadResume(file);
+    event.target.value = "";
+  };
+
+  const removeResume = async () => {
+    if (!resumeDocument?.id) {
+      setStatus("No uploaded resume to remove");
+      return;
+    }
+    setStatus("Removing resume...");
+    try {
+      await deleteDocument(resumeDocument.id);
+      const updated = await getProfile();
+      lastSavedProfileRef.current = JSON.stringify(updated);
+      setProfile(updated);
+      onProfileUpdated?.(updated);
+      setStatus("Resume removed");
+    } catch {
+      setStatus("Resume removal failed");
     }
   };
 
   return (
     <PageShell
       title="Profile"
-      description="Structured personal information used by fill plans. AI can only use facts stored here or in your answer bank."
-      action={
-        <Button disabled={!backendOnline} onClick={save}>
-          Save Profile
-        </Button>
-      }
+      description="Keep the information exact. JobFlow can fill only from these saved values."
     >
-      <div className="grid grid-cols-[1fr_340px] gap-4 max-[980px]:grid-cols-1">
+      <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-10 max-[980px]:grid-cols-1">
         <Card>
           <CardHeader>
-            <CardTitle>Identity</CardTitle>
-            <CardDescription>Name, contact, and public links.</CardDescription>
+            <CardTitle>Application Profile</CardTitle>
+            <CardDescription>
+              Keep this compact and exact. These values become the allowed source
+              data for common job application fields.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-4 max-[760px]:grid-cols-1">
+          <CardContent className="grid grid-cols-2 gap-x-4 gap-y-5 max-[760px]:grid-cols-1">
             <ProfileInput
-              label="First name"
-              value={profile.identity.first_name}
-              onChange={(value) => updateIdentity("first_name", value)}
-            />
-            <ProfileInput
-              label="Last name"
-              value={profile.identity.last_name}
-              onChange={(value) => updateIdentity("last_name", value)}
-            />
-            <ProfileInput
-              label="Preferred name"
-              value={profile.identity.preferred_name}
-              onChange={(value) => updateIdentity("preferred_name", value)}
+              label="Full name"
+              value={fullNameFromProfile(profile)}
+              onChange={updateFullName}
             />
             <ProfileInput
               label="Email"
@@ -218,870 +286,347 @@ export function ProfilePage({
               onChange={(value) => updateIdentity("location", value)}
             />
             <ProfileInput
-              label="Address"
-              value={profile.identity.address}
-              onChange={(value) => updateIdentity("address", value)}
+              label="Company"
+              value={profilePreference(profile, "company")}
+              onChange={(value) => updatePreference("company", value)}
             />
             <ProfileInput
-              label="LinkedIn"
+              label="LinkedIn URL"
               value={profile.links.linkedin}
               onChange={(value) => updateLink("linkedin", value)}
             />
             <ProfileInput
-              label="GitHub"
+              label="GitHub URL"
               value={profile.links.github}
               onChange={(value) => updateLink("github", value)}
             />
             <ProfileInput
-              label="Portfolio"
+              label="Portfolio URL"
               value={profile.links.portfolio}
               onChange={(value) => updateLink("portfolio", value)}
             />
-          </CardContent>
-        </Card>
-        <div className="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Local Control</CardTitle>
-              <CardDescription>{status}</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3 text-sm">
-              <InfoLine label="Backend" value={backendOnline ? "Online" : "Offline"} />
-              <InfoLine label="Documents" value={`${profile.documents.length}`} />
-              <InfoLine label="Answer bank" value={`${profile.answer_bank.length}`} />
-              <InfoLine label="Education facts" value={`${profile.education.length}`} />
-              <InfoLine label="Experience facts" value={`${profile.experience_facts.length}`} />
-              <InfoLine
-                label="Work auth"
-                value={formatNullableBoolean(profile.work_authorization.authorized)}
-              />
-              <div className="rounded-md bg-muted p-3 text-muted-foreground">
-                Sensitive facts such as sponsorship and EEO fields are never inferred.
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Work Authorization</CardTitle>
-              <CardDescription>
-                Legal and sponsorship facts stay user-provided and review-gated.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <ProfileInput
-                label="Country"
-                value={profile.work_authorization.country}
-                onChange={(value) => updateWorkAuthorization("country", value)}
-              />
+            <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Authorized to work?"
+                label="Are you legally authorized to work in the country for which you are applying?"
                 value={profile.work_authorization.authorized}
                 onChange={(value) => updateWorkAuthorization("authorized", value)}
               />
+            </div>
+            <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Requires sponsorship?"
+                label="Will you now or in the future require sponsorship for employment visa status (e.g., H-1B, etc.)?"
                 value={profile.work_authorization.requires_sponsorship}
                 onChange={(value) =>
                   updateWorkAuthorization("requires_sponsorship", value)
                 }
               />
-              <label className="flex flex-col gap-2 text-sm">
-                <span className="font-medium">Notes</span>
-                <textarea
-                  className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={profile.work_authorization.notes}
-                  onChange={(event) =>
-                    updateWorkAuthorization("notes", event.target.value)
-                  }
-                />
-              </label>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-4 max-[980px]:grid-cols-1">
-        <FactListEditor
-          description="Verified education facts such as degrees, programs, schools, and dates."
-          entries={profile.education}
-          title="Education Facts"
-          onAdd={() => addFact("education")}
-          onChange={(index, field, value) =>
-            updateFact("education", index, field, value)
-          }
-          onRemove={(index) => removeFact("education", index)}
-        />
-        <FactListEditor
-          description="Concrete work history facts AI may cite or rewrite."
-          entries={profile.experience_facts}
-          title="Experience Facts"
-          onAdd={() => addFact("experience_facts")}
-          onChange={(index, field, value) =>
-            updateFact("experience_facts", index, field, value)
-          }
-          onRemove={(index) => removeFact("experience_facts", index)}
-        />
-        <FactListEditor
-          description="Project examples available for role-specific answers."
-          entries={profile.project_facts}
-          title="Project Facts"
-          onAdd={() => addFact("project_facts")}
-          onChange={(index, field, value) =>
-            updateFact("project_facts", index, field, value)
-          }
-          onRemove={(index) => removeFact("project_facts", index)}
-        />
-        <FactListEditor
-          description="Skills and technologies that can map to form fields."
-          entries={profile.skill_facts}
-          title="Skill Facts"
-          onAdd={() => addFact("skill_facts")}
-          onChange={(index, field, value) =>
-            updateFact("skill_facts", index, field, value)
-          }
-          onRemove={(index) => removeFact("skill_facts", index)}
-        />
-        <AnswerBankEditor
-          entries={profile.answer_bank}
-          onAdd={addAnswer}
-          onChange={updateAnswer}
-          onRemove={removeAnswer}
-        />
-      </div>
-    </PageShell>
-  );
-}
-
-export function FillPlansPage({
-  fillPlan,
-  fillResult,
-  formSchema,
-  backendOnline = true,
-  onReviewField,
-  onSaveReviewedAnswer,
-}: {
-  fillPlan: FillPlan | null;
-  fillResult: FillResult | null;
-  formSchema: FormSchema | null;
-  backendOnline?: boolean;
-  onReviewField?: (
-    fieldId: string,
-    decision: FillPlanReviewDecision,
-    value?: string | boolean | null,
-  ) => void;
-  onSaveReviewedAnswer?: (request: {
-    fieldId: string;
-    title: string;
-    body: string;
-    questionType: string;
-    tags: string[];
-  }) => void;
-}) {
-  const reviewCount = fillPlan?.items.filter((item) => item.needs_review).length ?? 0;
-  const readyCount =
-    fillPlan?.items.filter((item) => !item.needs_review && item.confidence >= 0.85)
-      .length ?? 0;
-  const blockedCount = fillPlan?.blocked_items.length ?? 0;
-  const fieldById = new Map(
-    (formSchema?.fields ?? []).map((field) => [field.field_id, field]),
-  );
-
-  return (
-    <PageShell
-      title="Fill Plans"
-      description="Draft plans show exactly which field will be filled, from which source, and whether review is required."
-    >
-      <div className="grid grid-cols-3 gap-4 max-[980px]:grid-cols-1">
-        {[
-          ["High Confidence", `${readyCount} fields ready`, "success"],
-          ["Needs Review", `${reviewCount} fields paused`, "warning"],
-          ["Blocked", `${blockedCount} missing or sensitive`, "danger"],
-        ].map(([title, description, variant]) => (
-          <Card key={title}>
+            </div>
+            <ProfileInput
+              label="University"
+              value={profilePreference(profile, "university")}
+              onChange={(value) => updatePreference("university", value)}
+            />
+            <ProfileInput
+              label="Please tell us how you heard about this opportunity."
+              value={profilePreference(profile, "heard_about_opportunity")}
+              onChange={(value) => updatePreference("heard_about_opportunity", value)}
+            />
+            <ProfileSelect
+              label="Disability status"
+              value={profilePreference(profile, "disability_status")}
+              options={[
+                { value: "", label: "Prefer not set" },
+                {
+                  value: "Yes, I have a disability",
+                  label: "Yes, I have a disability",
+                },
+                {
+                  value: "No, I do not have a disability",
+                  label: "No, I do not have a disability",
+                },
+                { value: "I do not wish to answer", label: "I do not wish to answer" },
+              ]}
+              onChange={(value) => updatePreference("disability_status", value)}
+            />
+            <ProfileSelect
+              label="Veteran status"
+              value={profilePreference(profile, "veteran_status")}
+              options={[
+                { value: "", label: "Prefer not set" },
+                {
+                  value: "I am not a protected veteran",
+                  label: "I am not a protected veteran",
+                },
+                {
+                  value:
+                    "I identify as one or more classifications of protected veteran",
+                  label:
+                    "I identify as one or more classifications of protected veteran",
+                },
+                { value: "I do not wish to answer", label: "I do not wish to answer" },
+              ]}
+              onChange={(value) => updatePreference("veteran_status", value)}
+            />
+          </CardContent>
+        </Card>
+        <div className="flex flex-col gap-8">
+          <Card>
             <CardHeader>
-              <CardTitle>{title}</CardTitle>
-              <CardDescription>{description}</CardDescription>
+              <CardTitle>Resume Upload</CardTitle>
+              <CardDescription>
+                Store one local resume reference for file-upload fields. Uploading a
+                new resume automatically replaces the old one.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Badge variant={variant as "success" | "warning" | "danger"}>
-                Source-backed only
-              </Badge>
+            <CardContent className="flex flex-col gap-3">
+              {resumeDocument ? (
+                <div className="rounded-md border border-border p-3 text-sm">
+                  <div className="font-medium">{resumeDocument.name}</div>
+                  <div className="mt-1 break-all text-xs text-muted-foreground">
+                    {resumeDocument.path}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                  No resume uploaded yet.
+                </div>
+              )}
+              <ProfileInput
+                label="Resume name"
+                value={resumeName}
+                onChange={setResumeName}
+              />
+              <Input
+                ref={fileInputRef}
+                accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                className="hidden"
+                type="file"
+                onChange={handleResumeFileSelected}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={!backendOnline}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {resumeDocument ? "Replace Resume" : "Upload Resume"}
+                </Button>
+                <Button
+                  disabled={!backendOnline || !resumeDocument}
+                  variant="outline"
+                  onClick={removeResume}
+                >
+                  Remove
+                </Button>
+              </div>
             </CardContent>
           </Card>
-        ))}
-      </div>
-      <Card className="overflow-hidden">
-        <CardHeader className="flex-row items-start justify-between gap-3">
-          <div>
-            <CardTitle>Field-Level Review</CardTitle>
-            <CardDescription>
-              {formSchema
-                ? `${formSchema.ats} form with ${formSchema.fields.length} detected fields.`
-                : "Inspect a form and create a fill plan to populate this table."}
-            </CardDescription>
-          </div>
-          <Badge variant={fillResult?.error_count ? "danger" : "outline"}>
-            {fillResult ? fillResult.status : "No fill run"}
-          </Badge>
-        </CardHeader>
-        <CardContent className="p-0">
-          {fillPlan && onReviewField ? (
-            <div className="border-t border-border p-4">
-              <FillPlanReviewControls
-                disabled={!backendOnline}
-                fillPlan={fillPlan}
-                formSchema={formSchema}
-                onSaveReviewedAnswer={onSaveReviewedAnswer}
-                onReviewField={onReviewField}
+          <Card>
+            <CardHeader>
+              <CardTitle>Local Status</CardTitle>
+              <CardDescription>{status}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3 text-sm">
+              <InfoLine label="Backend" value={backendOnline ? "Online" : "Offline"} />
+              <InfoLine label="Resume" value={resumeDocument ? "Uploaded" : "Missing"} />
+              <InfoLine
+                label="Work authorized"
+                value={formatNullableBoolean(profile.work_authorization.authorized)}
               />
-            </div>
-          ) : null}
-          {!fillPlan ? (
-            <div className="m-4 rounded-md bg-muted p-4 text-sm text-muted-foreground">
-              No fill plan yet. Use the assistant to open a job page, inspect the form,
-              then create a source-backed plan.
-            </div>
-          ) : (
-            <div className="overflow-auto">
-              <table className="w-full min-w-[880px] border-collapse text-sm">
-                <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-2 font-medium">Field</th>
-                    <th className="px-4 py-2 font-medium">Action</th>
-                    <th className="px-4 py-2 font-medium">Value</th>
-                    <th className="px-4 py-2 font-medium">Confidence</th>
-                    <th className="px-4 py-2 font-medium">Review</th>
-                    <th className="px-4 py-2 font-medium">Sources</th>
-                    <th className="px-4 py-2 font-medium">Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fillPlan.items.map((item) => {
-                    const field = fieldById.get(item.field_id);
-                    return (
-                      <tr className="border-t border-border" key={item.field_id}>
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{field?.label || item.field_id}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {item.field_id}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">{item.action}</td>
-                        <td className="max-w-64 truncate px-4 py-3 text-muted-foreground">
-                          {formatPlanValue(item.value)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge
-                            variant={
-                              item.confidence >= 0.85
-                                ? "success"
-                                : item.confidence >= 0.5
-                                  ? "warning"
-                                  : "danger"
-                            }
-                          >
-                            {Math.round(item.confidence * 100)}%
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={item.needs_review ? "warning" : "success"}>
-                            {item.needs_review ? "Review" : "Ready"}
-                          </Badge>
-                        </td>
-                        <td className="max-w-56 px-4 py-3">
-                          <div className="flex flex-wrap gap-1">
-                            {item.source_refs.length === 0 ? (
-                              <span className="text-xs text-muted-foreground">None</span>
-                            ) : null}
-                            {item.source_refs.map((sourceRef) => (
-                              <Badge key={sourceRef} variant="outline">
-                                {sourceRef}
-                              </Badge>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="max-w-72 px-4 py-3 text-muted-foreground">
-                          {item.reason || "-"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {fillPlan.blocked_items.map((item) => {
-                    const field = fieldById.get(item.field_id);
-                    return (
-                      <tr className="border-t border-border bg-red-50/40" key={item.field_id}>
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{field?.label || item.field_id}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {item.field_id}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">blocked</td>
-                        <td className="px-4 py-3 text-muted-foreground">-</td>
-                        <td className="px-4 py-3">
-                          <Badge variant="danger">0%</Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant="danger">Blocked</Badge>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-muted-foreground">None</td>
-                        <td className="px-4 py-3 text-muted-foreground">{item.reason}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </PageShell>
-  );
-}
-
-export function DocumentsPage({
-  backendOnline,
-  onProfileUpdated,
-}: {
-  backendOnline: boolean;
-  onProfileUpdated?: (profile: Profile) => void;
-}) {
-  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [kind, setKind] = useState<"resume" | "cover_letter" | "other">("resume");
-  const [name, setName] = useState("Main Resume");
-  const [path, setPath] = useState("");
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [status, setStatus] = useState("Load your profile to view vault documents.");
-
-  useEffect(() => {
-    if (!backendOnline) {
-      return;
-    }
-    const controller = new AbortController();
-    getProfile(controller.signal)
-      .then((profile) => {
-        setDocuments(profile.documents);
-        onProfileUpdated?.(profile);
-        setStatus(`${profile.documents.length} documents stored locally.`);
-      })
-      .catch(() => setStatus("Unable to load local documents."));
-    return () => controller.abort();
-  }, [backendOnline]);
-
-  const importLocalDocument = async () => {
-    if (!path.trim()) {
-      setStatus("Enter a local file path before importing.");
-      return;
-    }
-    setStatus("Importing into local vault...");
-    try {
-      const document = await importDocument({
-        kind,
-        name: name.trim() || "Document",
-        path,
-      });
-      const updatedProfile = await getProfile();
-      setDocuments(updatedProfile.documents);
-      onProfileUpdated?.(updatedProfile);
-      setStatus(`Imported ${document.name}.`);
-      setConfirmDeleteId(null);
-    } catch {
-      setStatus("Import failed. Check that the path exists on this machine.");
-    }
-  };
-
-  const removeDocument = async (document: DocumentRecord) => {
-    if (!document.id) {
-      setStatus("This document is missing an id and cannot be removed here.");
-      return;
-    }
-    if (confirmDeleteId !== document.id) {
-      setConfirmDeleteId(document.id);
-      setStatus(`Click Confirm Remove to delete ${document.name || "this document"}.`);
-      return;
-    }
-    setStatus("Removing document from the local vault...");
-    try {
-      const result = await deleteDocument(document.id);
-      const updatedProfile = await getProfile();
-      setDocuments(updatedProfile.documents);
-      onProfileUpdated?.(updatedProfile);
-      setConfirmDeleteId(null);
-      setStatus(
-        result.file_deleted
-          ? `Removed ${document.name || "document"} and deleted its vault file.`
-          : `Removed ${document.name || "document"} from your profile.`,
-      );
-    } catch {
-      setStatus("Document removal failed.");
-    }
-  };
-
-  return (
-    <PageShell
-      title="Documents"
-      description="Local vault for resumes, cover letters, transcripts, and generated application snapshots."
-    >
-      <div className="grid grid-cols-[360px_1fr] gap-4 max-[980px]:grid-cols-1">
-        <Card>
-          <CardHeader>
-            <CardTitle>Import Local File</CardTitle>
-            <CardDescription>{status}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <label className="flex flex-col gap-2 text-sm">
-              <span className="font-medium">Document type</span>
-              <select
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                value={kind}
-                onChange={(event) =>
-                  setKind(event.target.value as "resume" | "cover_letter" | "other")
-                }
-              >
-                <option value="resume">Resume</option>
-                <option value="cover_letter">Cover letter</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
-            <ProfileInput label="Display name" value={name} onChange={setName} />
-            <ProfileInput label="Local file path" value={path} onChange={setPath} />
-            <Button disabled={!backendOnline} onClick={importLocalDocument}>
-              Import to Vault
-            </Button>
-            <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-              Files are copied into JobFlow's local vault. The original path is not
-              used for future fills.
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Vault Documents</CardTitle>
-            <CardDescription>Documents available to fill plans and records.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-4 max-[980px]:grid-cols-1">
-            {documents.length === 0 ? (
-              <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-                No documents imported yet.
-              </div>
-            ) : null}
-            {documents.map((document) => (
-              <div
-                className="flex items-center justify-between gap-3 rounded-md border border-border p-3"
-                key={document.id ?? document.path}
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <FileText />
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium">{document.name}</span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {document.path}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Badge variant="outline">{document.kind}</Badge>
-                  {confirmDeleteId === document.id ? (
-                    <Button
-                      onClick={() => {
-                        setConfirmDeleteId(null);
-                        setStatus("Document removal cancelled.");
-                      }}
-                      size="sm"
-                      variant="outline"
-                    >
-                      Cancel
-                    </Button>
-                  ) : null}
-                  <Button
-                    disabled={!backendOnline}
-                    onClick={() => void removeDocument(document)}
-                    size="sm"
-                    variant={confirmDeleteId === document.id ? "destructive" : "outline"}
-                  >
-                    <Trash2 className="size-3.5" />
-                    {confirmDeleteId === document.id ? "Confirm Remove" : "Remove"}
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
-    </PageShell>
-  );
-}
-
-export function DataSourcesPage({ backendOnline }: { backendOnline: boolean }) {
-  const [question, setQuestion] = useState(
-    "Why are you interested in this AI automation role?",
-  );
-  const [questionType, setQuestionType] = useState("motivation");
-  const [keywords, setKeywords] = useState("ai, automation");
-  const [useModel, setUseModel] = useState(false);
-  const [draft, setDraft] = useState<OpenAnswerDraft | null>(null);
-  const [status, setStatus] = useState("Drafts use only stored facts and answers.");
-  const [contextPreview, setContextPreview] = useState<PromptContextPreview | null>(
-    null,
-  );
-  const [contextStatus, setContextStatus] = useState("Loading local context...");
-
-  useEffect(() => {
-    if (!backendOnline) {
-      setContextStatus("Backend offline. Start the local backend to inspect context.");
-      return;
-    }
-    const controller = new AbortController();
-    getPromptContextPreview(controller.signal)
-      .then((preview) => {
-        setContextPreview(preview);
-        setContextStatus(`${preview.source_count} local sources available to tools.`);
-      })
-      .catch(() => {
-        setContextStatus("Context preview failed. Check the local backend.");
-      });
-    return () => controller.abort();
-  }, [backendOnline]);
-
-  const refreshContextPreview = async () => {
-    setContextStatus("Refreshing local context...");
-    try {
-      const preview = await getPromptContextPreview();
-      setContextPreview(preview);
-      setContextStatus(`${preview.source_count} local sources available to tools.`);
-    } catch {
-      setContextStatus("Context preview failed. Check the local backend.");
-    }
-  };
-
-  const createDraft = async () => {
-    setStatus("Searching local facts...");
-    try {
-      const result = await draftOpenAnswer({
-        question,
-        question_type: questionType,
-        keywords: keywords
-          .split(",")
-          .map((keyword) => keyword.trim())
-          .filter(Boolean),
-        use_model: useModel,
-      });
-      setDraft(result);
-      setStatus(
-        result.source_refs.length > 0
-          ? `${result.source_refs.length} source refs used. Review required.`
-          : "No matching sources found. Add facts or answer-bank entries.",
-      );
-    } catch {
-      setStatus("Draft failed. Check the backend or local model settings.");
-    }
-  };
-
-  return (
-    <PageShell
-      title="Data Sources"
-      description="Facts and answer-bank entries that AI tools may use. Anything not listed here is out of bounds."
-    >
-      <div className="grid grid-cols-[1fr_380px] gap-4 max-[980px]:grid-cols-1">
-        <Card>
-          <CardHeader>
-            <CardTitle>Open Answer Draft</CardTitle>
-            <CardDescription>{status}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <label className="flex flex-col gap-2 text-sm">
-              <span className="font-medium">Question</span>
-              <textarea
-                className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
+              <InfoLine
+                label="Needs sponsorship"
+                value={formatNullableBoolean(
+                  profile.work_authorization.requires_sponsorship,
+                )}
               />
-            </label>
-            <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
-              <ProfileInput
-                label="Question type"
-                value={questionType}
-                onChange={setQuestionType}
-              />
-              <ProfileInput label="Keywords" value={keywords} onChange={setKeywords} />
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                checked={useModel}
-                type="checkbox"
-                onChange={(event) => setUseModel(event.target.checked)}
-              />
-              <span>Use local Ollama model when available</span>
-            </label>
-            <Button disabled={!backendOnline} onClick={createDraft}>
-              Draft from Sources
-            </Button>
-            {draft ? (
-              <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium">Generated Draft</span>
-                  <Badge variant={draft.fallback_used ? "outline" : "success"}>
-                    {draft.fallback_used ? "Fallback" : "Model"}
-                  </Badge>
-                </div>
-                <p className="whitespace-pre-wrap text-sm">{draft.answer || "No answer."}</p>
-                <div className="flex flex-wrap gap-2">
-                  {draft.source_refs.map((sourceRef) => (
-                    <Badge key={sourceRef} variant="outline">
-                      {sourceRef}
-                    </Badge>
-                  ))}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {draft.needs_review
-                    ? "Review is required before using this answer."
-                    : "Ready to use."}
-                </div>
+              <div className="rounded-md bg-muted p-3 text-muted-foreground">
+                Open answers and sensitive fields are never invented. Missing values
+                stay blank or pause for review.
               </div>
-            ) : null}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Tool Calls</CardTitle>
-            <CardDescription>Visible provenance for AI drafting.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            {draft?.tool_calls.length ? (
-              draft.tool_calls.map((call) => (
-                <div
-                  className="rounded-md border border-border p-3 text-sm"
-                  key={call.tool_name}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{call.tool_name}</span>
-                    <Badge variant="outline">{call.result_count}</Badge>
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {call.source_refs.join(", ") || "No matching sources"}
-                  </p>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-                Run a draft to see tool calls and source references.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-      <PromptContextPreviewPanel
-        backendOnline={backendOnline}
-        preview={contextPreview}
-        status={contextStatus}
-        onRefresh={refreshContextPreview}
-      />
-      <StaticSourcesOverview />
-    </PageShell>
-  );
-}
-
-function PromptContextPreviewPanel({
-  backendOnline,
-  preview,
-  status,
-  onRefresh,
-}: {
-  backendOnline: boolean;
-  preview: PromptContextPreview | null;
-  status: string;
-  onRefresh: () => void;
-}) {
-  const visibleSources = preview?.sources.slice(0, 12) ?? [];
-  const hiddenSourceCount = preview
-    ? Math.max(0, preview.sources.length - visibleSources.length)
-    : 0;
-
-  return (
-    <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3">
-        <div className="flex flex-col gap-1.5">
-          <CardTitle>Prompt Context Preview</CardTitle>
-          <CardDescription>{status}</CardDescription>
+            </CardContent>
+          </Card>
         </div>
-        <Button disabled={!backendOnline} size="sm" variant="outline" onClick={onRefresh}>
-          Refresh
-        </Button>
-      </CardHeader>
-      <CardContent className="grid grid-cols-[1fr_420px] gap-4 max-[1040px]:grid-cols-1">
-        <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
-            <ContextList title="Rules" items={preview?.system_rules ?? []} />
-            <ContextList title="Preferences" items={preview?.preference_summary ?? []} />
-          </div>
-          <div className="overflow-auto rounded-md border border-border">
-            <table className="w-full min-w-[760px] border-collapse text-sm">
-              <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Source</th>
-                  <th className="px-3 py-2 font-medium">Category</th>
-                  <th className="px-3 py-2 font-medium">Value</th>
-                  <th className="px-3 py-2 font-medium">Risk</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleSources.length === 0 ? (
-                  <tr>
-                    <td
-                      className="px-3 py-4 text-sm text-muted-foreground"
-                      colSpan={4}
-                    >
-                      No prompt context loaded yet.
-                    </td>
-                  </tr>
-                ) : null}
-                {visibleSources.map((source) => (
-                  <tr className="border-t border-border" key={source.source_ref}>
-                    <td className="max-w-56 px-3 py-3">
-                      <div className="truncate font-medium">{source.label}</div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {source.source_ref}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">{source.category}</td>
-                    <td className="max-w-80 truncate px-3 py-3 text-muted-foreground">
-                      {source.value}
-                    </td>
-                    <td className="px-3 py-3">
-                      <Badge variant={source.sensitive ? "warning" : "outline"}>
-                        {source.sensitive ? "Sensitive" : "Normal"}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {hiddenSourceCount > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              Showing first {visibleSources.length} sources. {hiddenSourceCount} more are
-              included in the generated prompt below.
-            </p>
-          ) : null}
-        </div>
-        <label className="flex min-h-96 flex-col gap-2 text-sm">
-          <span className="font-medium">Generated prompt boundary</span>
-          <textarea
-            className="min-h-96 flex-1 rounded-md border border-input bg-muted/30 px-3 py-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            readOnly
-            value={preview?.generated_prompt ?? ""}
-          />
-        </label>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ContextList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div className="rounded-md border border-border p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="font-medium">{title}</span>
-        <Badge variant="outline">{items.length}</Badge>
       </div>
-      {items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No entries loaded.</p>
-      ) : (
-        <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
-          {items.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </PageShell>
   );
 }
 
-function StaticSourcesOverview() {
+function fullNameFromProfile(profile: Profile): string {
+  return [profile.identity.first_name, profile.identity.last_name]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function splitFullName(value: string): Pick<Profile["identity"], "first_name" | "last_name"> {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return { first_name: "", last_name: "" };
+  }
+  if (parts.length === 1) {
+    return { first_name: parts[0], last_name: "" };
+  }
+  return {
+    first_name: parts.slice(0, -1).join(" "),
+    last_name: parts[parts.length - 1],
+  };
+}
+
+function profilePreference(profile: Profile, key: string): string {
+  const value = profile.preferences[key];
+  return typeof value === "string" ? value : "";
+}
+
+function modelOptionsForProvider(
+  provider: Preferences["ai_provider"],
+  currentModel: string,
+): ModelOption[] {
+  const options = API_MODEL_OPTIONS[provider] ?? [];
+  if (!currentModel || options.some((option) => option.value === currentModel)) {
+    return options;
+  }
+  return [{ value: currentModel, label: `${currentModel} (saved)` }, ...options];
+}
+
+function providerLabel(provider: Preferences["ai_provider"]): string {
   return (
-    <div className="grid grid-cols-2 gap-4 max-[980px]:grid-cols-1">
-      <Card>
-        <CardHeader>
-          <CardTitle>Answer Bank</CardTitle>
-          <CardDescription>Preset answers for open-ended questions.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {["Why this role?", "AI automation experience", "Tell us about yourself"].map(
-            (item) => (
-              <div className="rounded-md border border-border p-3" key={item}>
-                <span className="font-medium">{item}</span>
-                <p className="text-sm text-muted-foreground">
-                  Used only with source references and review.
-                </p>
-              </div>
-            ),
-          )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Fact Categories</CardTitle>
-          <CardDescription>Profile facts available to tool calls.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {["Experience facts", "Project facts", "Skill facts", "Education"].map((item) => (
-            <div
-              className="flex items-center justify-between rounded-md border border-border p-3"
-              key={item}
-            >
-              <div className="flex items-center gap-3">
-                <Database />
-                <span className="font-medium">{item}</span>
-              </div>
-              <Badge variant="outline">Local</Badge>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-    </div>
+    AI_PROVIDER_OPTIONS.find((option) => option.value === provider)?.label ??
+    provider
   );
 }
 
 export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences);
-  const [status, setStatus] = useState("Not saved");
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [status, setStatus] = useState("Not loaded");
+  const lastSavedPreferencesRef = useRef("");
 
   useEffect(() => {
     if (!backendOnline) {
+      setPreferencesLoaded(false);
       return;
     }
     const controller = new AbortController();
     getPreferences(controller.signal)
       .then((loaded) => {
+        lastSavedPreferencesRef.current = JSON.stringify(loaded);
         setPreferences(loaded);
-        setStatus("Loaded from local backend");
+        setPreferencesLoaded(true);
+        setStatus("Loaded. Changes auto-save.");
       })
-      .catch(() => setStatus("Using defaults"));
+      .catch(() => {
+        lastSavedPreferencesRef.current = JSON.stringify(defaultPreferences);
+        setPreferencesLoaded(true);
+        setStatus("Using defaults. Changes auto-save when backend is available.");
+      });
     return () => controller.abort();
   }, [backendOnline]);
 
-  const save = async () => {
-    setStatus("Saving...");
-    try {
-      const saved = await putPreferences(preferences);
-      setPreferences(saved);
-      setStatus("Saved locally");
-    } catch {
-      setStatus("Backend unavailable");
+  useEffect(() => {
+    if (!backendOnline || !preferencesLoaded) {
+      return;
     }
-  };
+
+    const serialized = JSON.stringify(preferences);
+    if (serialized === lastSavedPreferencesRef.current) {
+      return;
+    }
+
+    setStatus("Auto-saving...");
+    const timeout = window.setTimeout(() => {
+      void putPreferences(preferences)
+        .then((saved) => {
+          lastSavedPreferencesRef.current = JSON.stringify(saved);
+          setPreferences(saved);
+          setStatus("Saved locally");
+        })
+        .catch(() => setStatus("Auto-save failed. Backend unavailable."));
+    }, 700);
+
+    return () => window.clearTimeout(timeout);
+  }, [backendOnline, preferences, preferencesLoaded]);
+
+  const apiModelOptions = modelOptionsForProvider(
+    preferences.ai_provider,
+    preferences.ai_model,
+  );
+  const modelSelectionMode =
+    preferences.ai_provider === "ollama" || preferences.ai_provider === "custom"
+      ? "manual"
+      : "dropdown";
 
   return (
     <PageShell
-      title="Automation Rules"
+      title="Settings"
       description="Safety settings that govern filling, review, and source-backed answers."
-      action={
-        <Button disabled={!backendOnline} onClick={save}>
-          Save Rules
-        </Button>
-      }
     >
       <div className="grid grid-cols-[1fr_320px] gap-4 max-[980px]:grid-cols-1">
         <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Model Connection</CardTitle>
+              <CardDescription>
+                Choose the local or API model used for source-backed answer drafting.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 gap-4 max-[760px]:grid-cols-1">
+              <PolicySelect
+                label="Model provider"
+                options={AI_PROVIDER_OPTIONS}
+                value={preferences.ai_provider}
+                onChange={(value) =>
+                  setPreferences((current) => {
+                    const provider = value as Preferences["ai_provider"];
+                    return {
+                      ...current,
+                      ai_provider: provider,
+                      ai_model: DEFAULT_MODEL_BY_PROVIDER[provider],
+                      ai_api_key: provider === "ollama" ? "" : current.ai_api_key,
+                      ai_base_url:
+                        DEFAULT_BASE_URL_BY_PROVIDER[provider] ?? current.ai_base_url,
+                    };
+                  })
+                }
+              />
+              {modelSelectionMode === "manual" ? (
+                <ProfileInput
+                  label={
+                    preferences.ai_provider === "ollama"
+                      ? "Ollama model name"
+                      : "Model name"
+                  }
+                  value={preferences.ai_model}
+                  onChange={(value) =>
+                    setPreferences((current) => ({ ...current, ai_model: value }))
+                  }
+                />
+              ) : (
+                <ProfileSelect
+                  label="Model"
+                  options={apiModelOptions}
+                  value={preferences.ai_model}
+                  onChange={(value) =>
+                    setPreferences((current) => ({ ...current, ai_model: value }))
+                  }
+                />
+              )}
+              {preferences.ai_provider !== "ollama" ? (
+                <ProfileInput
+                  label="API key"
+                  type="password"
+                  value={preferences.ai_api_key}
+                  onChange={(value) =>
+                    setPreferences((current) => ({ ...current, ai_api_key: value }))
+                  }
+                />
+              ) : null}
+              <ProfileInput
+                label="Base URL"
+                value={preferences.ai_base_url}
+                onChange={(value) =>
+                  setPreferences((current) => ({ ...current, ai_base_url: value }))
+                }
+              />
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle>Review Boundaries</CardTitle>
@@ -1254,7 +799,15 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
             <InfoLine label="Relocation" value={preferences.relocation_policy} />
             <InfoLine label="Low confidence" value={preferences.low_confidence_policy} />
             <InfoLine label="Missing facts" value={preferences.missing_fact_policy} />
-            <div className="flex items-start gap-2 rounded-md bg-amber-50 p-3 text-amber-800">
+            <InfoLine label="Provider" value={providerLabel(preferences.ai_provider)} />
+            <InfoLine label="Model" value={preferences.ai_model || "Not set"} />
+            {preferences.ai_provider !== "ollama" ? (
+              <InfoLine
+                label="API key"
+                value={preferences.ai_api_key ? "Saved locally" : "Not set"}
+              />
+            ) : null}
+            <div className="flex items-start gap-2 rounded-[16px] bg-muted p-3 text-foreground">
               <AlertTriangle />
               <p>AI may rewrite user facts, but cannot create unsupported factual claims.</p>
             </div>
@@ -1360,188 +913,71 @@ function PageShell({
   children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-xl font-semibold">{title}</h1>
-          <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>
+    <section className="flex flex-col gap-8">
+      <div className="flex items-start justify-between gap-6 max-[760px]:flex-col">
+        <div className="flex flex-col gap-2">
+          <h1 className="font-heading scroll-m-20 text-4xl font-extrabold text-balance max-[760px]:text-3xl">
+            {title}
+          </h1>
+          <p className="max-w-3xl text-xl text-muted-foreground text-balance">
+            {description}
+          </p>
         </div>
-        {action}
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       {children}
     </section>
   );
 }
 
-function FactListEditor({
-  title,
-  description,
-  entries,
-  onAdd,
-  onChange,
-  onRemove,
-}: {
-  title: string;
-  description: string;
-  entries: Fact[];
-  onAdd: () => void;
-  onChange: (
-    index: number,
-    field: keyof Pick<Fact, "title" | "body" | "tags">,
-    value: string | string[],
-  ) => void;
-  onRemove: (index: number) => void;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3">
-        <div className="flex flex-col gap-1.5">
-          <CardTitle>{title}</CardTitle>
-          <CardDescription>{description}</CardDescription>
-        </div>
-        <Button size="sm" variant="outline" onClick={onAdd}>
-          Add
-        </Button>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {entries.length === 0 ? (
-          <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-            No facts yet. Add only verified user-provided information.
-          </div>
-        ) : null}
-        {entries.map((entry, index) => (
-          <div className="flex flex-col gap-2 rounded-md border border-border p-3" key={entry.id ?? index}>
-            <div className="flex items-center justify-between gap-2">
-              <Badge variant="outline">Fact {index + 1}</Badge>
-              <Button size="sm" variant="outline" onClick={() => onRemove(index)}>
-                <Trash2 className="size-3.5" />
-                Remove
-              </Button>
-            </div>
-            <ProfileInput
-              label="Title"
-              value={entry.title}
-              onChange={(value) => onChange(index, "title", value)}
-            />
-            <ProfileInput
-              label="Tags"
-              value={formatTags(entry.tags)}
-              onChange={(value) => onChange(index, "tags", parseTags(value))}
-            />
-            <label className="flex flex-col gap-2 text-sm">
-              <span className="font-medium">Fact</span>
-              <textarea
-                className="min-h-20 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={entry.body}
-                onChange={(event) => onChange(index, "body", event.target.value)}
-              />
-            </label>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AnswerBankEditor({
-  entries,
-  onAdd,
-  onChange,
-  onRemove,
-}: {
-  entries: AnswerBankEntry[];
-  onAdd: () => void;
-  onChange: (
-    index: number,
-    field: keyof Pick<AnswerBankEntry, "question_type" | "title" | "body" | "tags">,
-    value: string | string[],
-  ) => void;
-  onRemove: (index: number) => void;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3">
-        <div className="flex flex-col gap-1.5">
-          <CardTitle>Answer Bank</CardTitle>
-          <CardDescription>
-            Preset answers used for open-ended fields, always with review.
-          </CardDescription>
-        </div>
-        <Button size="sm" variant="outline" onClick={onAdd}>
-          Add
-        </Button>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {entries.length === 0 ? (
-          <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-            Add reusable answers such as motivation, company interest, or role fit.
-          </div>
-        ) : null}
-        {entries.map((entry, index) => (
-          <div className="flex flex-col gap-2 rounded-md border border-border p-3" key={entry.id ?? index}>
-            <div className="flex items-center justify-between gap-2">
-              <Badge variant="outline">Answer {index + 1}</Badge>
-              <Button size="sm" variant="outline" onClick={() => onRemove(index)}>
-                <Trash2 className="size-3.5" />
-                Remove
-              </Button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <ProfileInput
-                label="Question type"
-                value={entry.question_type}
-                onChange={(value) => onChange(index, "question_type", value)}
-              />
-              <ProfileInput
-                label="Title"
-                value={entry.title}
-                onChange={(value) => onChange(index, "title", value)}
-              />
-            </div>
-            <ProfileInput
-              label="Tags"
-              value={formatTags(entry.tags)}
-              onChange={(value) => onChange(index, "tags", parseTags(value))}
-            />
-            <label className="flex flex-col gap-2 text-sm">
-              <span className="font-medium">Answer</span>
-              <textarea
-                className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={entry.body}
-                onChange={(event) => onChange(index, "body", event.target.value)}
-              />
-            </label>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-function formatTags(tags: string[] | undefined): string {
-  return tags?.join(", ") ?? "";
-}
-
-function parseTags(value: string): string[] {
-  return value
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
 function ProfileInput({
   label,
+  type = "text",
   value,
   onChange,
 }: {
   label: string;
+  type?: string;
   value: string;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="flex flex-col gap-2 text-sm">
-      <span className="font-medium">{label}</span>
-      <Input value={value} onChange={(event) => onChange(event.target.value)} />
+      <span className="leading-none font-medium">{label}</span>
+      <Input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function ProfileSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-2 text-sm">
+      <span className="leading-none font-medium">{label}</span>
+      <select
+        className="h-12 rounded-[16px] border border-transparent bg-muted px-4 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option.value || "empty"} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }
@@ -1557,9 +993,9 @@ function NullableBooleanSelect({
 }) {
   return (
     <label className="flex flex-col gap-2 text-sm">
-      <span className="font-medium">{label}</span>
+      <span className="leading-none font-medium">{label}</span>
       <select
-        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+        className="h-12 rounded-[16px] border border-transparent bg-muted px-4 text-sm"
         value={value === null ? "unknown" : value ? "yes" : "no"}
         onChange={(event) => {
           const selected = event.target.value;
@@ -1589,9 +1025,9 @@ function PolicySelect({
 
   return (
     <label className="flex flex-col gap-2 text-sm">
-      <span className="font-medium">{label}</span>
+      <span className="leading-none font-medium">{label}</span>
       <select
-        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+        className="h-12 rounded-[16px] border border-transparent bg-muted px-4 text-sm"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
@@ -1645,7 +1081,7 @@ function SwitchRow({
   return (
     <label className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
       <div className="flex flex-col gap-1">
-        <span className="font-medium">{label}</span>
+        <span className="text-sm leading-none font-medium">{label}</span>
         <span className="text-sm text-muted-foreground">{description}</span>
       </div>
       <button
@@ -1684,14 +1120,24 @@ export function DashboardPage({
   profile: Profile | null;
 }) {
   const identityReady = Boolean(
-    profile?.identity.first_name && profile.identity.last_name && profile.identity.email,
+    profile && fullNameFromProfile(profile) && profile.identity.email,
   );
-  const documentCount = profile?.documents.length ?? 0;
-  const answerCount = profile?.answer_bank.length ?? 0;
-  const factCount =
-    (profile?.experience_facts.length ?? 0) +
-    (profile?.project_facts.length ?? 0) +
-    (profile?.skill_facts.length ?? 0);
+  const resumeReady = Boolean(
+    profile?.documents.some((document) => document.kind === "resume"),
+  );
+  const savedProfileFieldCount = profile
+    ? [
+        fullNameFromProfile(profile),
+        profile.identity.email,
+        profile.identity.phone,
+        profile.identity.location,
+        profilePreference(profile, "company"),
+        profile.links.linkedin,
+        profile.links.github,
+        profilePreference(profile, "university"),
+        profilePreference(profile, "heard_about_opportunity"),
+      ].filter(Boolean).length
+    : 0;
   const submittedCount = applications.filter(
     (application) => application.status === "applied",
   ).length;
@@ -1705,14 +1151,12 @@ export function DashboardPage({
   const blockedCount = fillPlan?.blocked_items.length ?? 0;
   const latestApplication = applications[0];
   const nextAction = dashboardNextAction({
-    answerCount,
     backendOnline,
     blockedCount,
-    documentCount,
-    factCount,
     fillPlan,
     formSchema,
     identityReady,
+    resumeReady,
     reviewCount,
   });
 
@@ -1736,12 +1180,17 @@ export function DashboardPage({
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm">
             <InfoLine label="Identity" value={identityReady ? "Ready" : "Incomplete"} />
-            <InfoLine label="Documents" value={`${documentCount}`} />
-            <InfoLine label="Answer bank" value={`${answerCount}`} />
-            <InfoLine label="Stored facts" value={`${factCount}`} />
+            <InfoLine label="Resume" value={resumeReady ? "Uploaded" : "Missing"} />
+            <InfoLine label="Saved fields" value={`${savedProfileFieldCount}/9`} />
             <InfoLine
               label="Work auth"
               value={formatNullableBoolean(profile?.work_authorization.authorized ?? null)}
+            />
+            <InfoLine
+              label="Sponsorship"
+              value={formatNullableBoolean(
+                profile?.work_authorization.requires_sponsorship ?? null,
+              )}
             />
           </CardContent>
         </Card>
@@ -1850,24 +1299,20 @@ function SafetyTile({
 }
 
 function dashboardNextAction({
-  answerCount,
   backendOnline,
   blockedCount,
-  documentCount,
-  factCount,
   fillPlan,
   formSchema,
   identityReady,
+  resumeReady,
   reviewCount,
 }: {
-  answerCount: number;
   backendOnline: boolean;
   blockedCount: number;
-  documentCount: number;
-  factCount: number;
   fillPlan: FillPlan | null;
   formSchema: FormSchema | null;
   identityReady: boolean;
+  resumeReady: boolean;
   reviewCount: number;
 }): string {
   if (!backendOnline) {
@@ -1876,11 +1321,8 @@ function dashboardNextAction({
   if (!identityReady) {
     return "Complete name and email in Profile.";
   }
-  if (documentCount === 0) {
-    return "Import a resume into the document vault.";
-  }
-  if (answerCount === 0 && factCount === 0) {
-    return "Add answer-bank presets or verified experience facts.";
+  if (!resumeReady) {
+    return "Upload a resume in Profile.";
   }
   if (!formSchema) {
     return "Open a job page and inspect the application form.";

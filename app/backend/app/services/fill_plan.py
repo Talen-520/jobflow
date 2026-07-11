@@ -53,8 +53,12 @@ class FillPlanService:
         self, field: FormField, tools: ProfileTools, preferences: Preferences
     ) -> FillPlanItem | BlockedItem:
         label = self._field_text(field)
-        if self._is_eeo(label) and not preferences.fill_eeo_fields:
-            return BlockedItem(field_id=field.field_id, reason="EEO field disabled")
+        if self._is_eeo(label):
+            if not preferences.fill_eeo_fields:
+                return BlockedItem(field_id=field.field_id, reason="EEO field disabled")
+            eeo_item = self._map_eeo_field(field, tools, label)
+            if eeo_item:
+                return eeo_item
         preference_item = self._map_preference_policy_field(
             field, tools, preferences, label
         )
@@ -75,6 +79,10 @@ class FillPlanService:
         direct = self._direct_profile_mapping(label, tools)
         if direct:
             return self._item(field, direct, "Mapped from profile field.")
+
+        direct_preference = self._map_profile_preference_field(field, tools, label)
+        if direct_preference:
+            return direct_preference
 
         if field.type == FieldType.file:
             return self._map_document(field, tools.profile)
@@ -117,6 +125,41 @@ class FillPlanService:
                 return tools.get_profile_field(path)
         return None
 
+    def _map_profile_preference_field(
+        self, field: FormField, tools: ProfileTools, label: str
+    ) -> FillPlanItem | None:
+        rules = [
+            (
+                r"\bhow\s+did\s+you\s+hear\b|\bheard\s+about\b|\bsource\b|\breferral\b",
+                "preferences.heard_about_opportunity",
+                "Mapped from profile opportunity-source preference.",
+                True,
+            ),
+            (
+                r"\bcurrent\s+company\b|\bcompany\b|\bemployer\b",
+                "preferences.company",
+                "Mapped from profile company preference.",
+                False,
+            ),
+            (
+                r"\buniversity\b|\bschool\b|\bcollege\b",
+                "preferences.university",
+                "Mapped from profile university preference.",
+                False,
+            ),
+        ]
+        for pattern, path, reason, allow_open_question in rules:
+            if not re.search(pattern, label):
+                continue
+            if not allow_open_question and (
+                field.type == FieldType.textarea or self._is_open_question(label)
+            ):
+                continue
+            result = tools.get_profile_field(path)
+            if result:
+                return self._item(field, result, reason)
+        return None
+
     def _map_sensitive_field(
         self, field: FormField, tools: ProfileTools, label: str
     ) -> FillPlanItem | None:
@@ -128,6 +171,23 @@ class FillPlanService:
             result = tools.get_profile_field("work_authorization.authorized")
             if result:
                 return self._item(field, result, "Sensitive work authorization fact.")
+        return None
+
+    def _map_eeo_field(
+        self, field: FormField, tools: ProfileTools, label: str
+    ) -> FillPlanItem | None:
+        if "disability" in label:
+            result = tools.get_profile_field("preferences.disability_status")
+            if result:
+                item = self._item(field, result, "EEO profile preference; review required.")
+                item.needs_review = True
+                return item
+        if "veteran" in label:
+            result = tools.get_profile_field("preferences.veteran_status")
+            if result:
+                item = self._item(field, result, "EEO profile preference; review required.")
+                item.needs_review = True
+                return item
         return None
 
     def _map_preference_policy_field(

@@ -155,6 +155,145 @@ def test_sensitive_work_authorization_fact_can_fill_when_enabled() -> None:
     assert authorized_item.source_refs == ["profile.work_authorization.authorized"]
 
 
+def test_radio_work_authorization_maps_to_selected_option_when_enabled() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="authorized",
+                label="authorized",
+                type=FieldType.radio,
+                required=True,
+                options=["Yes", "No"],
+                selector='[name="authorized"]',
+                sensitive=True,
+            )
+        ]
+    )
+    profile = UserProfile(work_authorization={"authorized": True})
+    preferences = Preferences(fill_sensitive_fields=True)
+
+    plan = FillPlanService().create_plan(form, profile, preferences)
+
+    assert plan.blocked_items == []
+    authorized_item = plan.items[0]
+    assert authorized_item.field_id == "authorized"
+    assert authorized_item.action == "select"
+    assert authorized_item.value == "Yes"
+    assert authorized_item.selector == '[name="authorized"]'
+    assert authorized_item.needs_review is False
+
+
+def test_profile_preferences_fill_common_application_fields() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="company",
+                label="Current company",
+                type=FieldType.text,
+                required=False,
+                selector="#company",
+            ),
+            FormField(
+                field_id="university",
+                label="University",
+                type=FieldType.text,
+                required=False,
+                selector="#university",
+            ),
+            FormField(
+                field_id="source",
+                label="Please tell us how you heard about this opportunity.",
+                type=FieldType.textarea,
+                required=False,
+                selector="#source",
+            ),
+        ]
+    )
+    profile = UserProfile(
+        preferences={
+            "company": "AutoJob Labs",
+            "university": "Example University",
+            "heard_about_opportunity": "LinkedIn",
+        }
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    values = {item.field_id: item.value for item in plan.items}
+    assert values == {
+        "company": "AutoJob Labs",
+        "university": "Example University",
+        "source": "LinkedIn",
+    }
+    source_refs = {item.field_id: item.source_refs for item in plan.items}
+    assert source_refs["company"] == ["profile.preferences.company"]
+    assert source_refs["university"] == ["profile.preferences.university"]
+    assert source_refs["source"] == ["profile.preferences.heard_about_opportunity"]
+
+
+def test_eeo_preferences_are_gated_and_review_required() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="disability",
+                label="Disability status",
+                type=FieldType.select,
+                required=False,
+                options=[
+                    "Select one",
+                    "Yes, I have a disability",
+                    "No, I do not have a disability",
+                    "I do not wish to answer",
+                ],
+                selector="#disability",
+            ),
+            FormField(
+                field_id="veteran",
+                label="Veteran status",
+                type=FieldType.select,
+                required=False,
+                options=[
+                    "Select one",
+                    "I am not a protected veteran",
+                    "I identify as one or more classifications of protected veteran",
+                    "I do not wish to answer",
+                ],
+                selector="#veteran",
+            ),
+        ]
+    )
+    profile = UserProfile(
+        preferences={
+            "disability_status": "No, I do not have a disability",
+            "veteran_status": "I am not a protected veteran",
+        }
+    )
+
+    gated_plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert gated_plan.items == []
+    assert {item.field_id for item in gated_plan.blocked_items} == {
+        "disability",
+        "veteran",
+    }
+
+    enabled_plan = FillPlanService().create_plan(
+        form, profile, Preferences(fill_eeo_fields=True)
+    )
+
+    assert enabled_plan.blocked_items == []
+    values = {item.field_id: item.value for item in enabled_plan.items}
+    assert values == {
+        "disability": "No, I do not have a disability",
+        "veteran": "I am not a protected veteran",
+    }
+    assert all(item.needs_review for item in enabled_plan.items)
+    source_refs = {item.field_id: item.source_refs for item in enabled_plan.items}
+    assert source_refs["disability"] == ["profile.preferences.disability_status"]
+    assert source_refs["veteran"] == ["profile.preferences.veteran_status"]
+
+
 def test_missing_fact_policy_can_leave_required_field_blank() -> None:
     form = FormSchema(
         fields=[

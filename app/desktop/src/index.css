@@ -23,25 +23,27 @@
 }
 
 :root {
-  --background: 210 20% 98%;
-  --foreground: 222 47% 11%;
+  --font-heading: Geist, "Geist Sans", -apple-system, BlinkMacSystemFont, Inter,
+    ui-sans-serif, "Segoe UI", sans-serif;
+  --background: 0 0% 100%;
+  --foreground: 0 0% 10%;
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
+  --card-foreground: 0 0% 10%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 221 83% 53%;
+  --popover-foreground: 0 0% 10%;
+  --primary: 0 0% 11%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 214 32% 91%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 214 32% 91%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 214 32% 91%;
-  --accent-foreground: 222 47% 11%;
-  --destructive: 0 72% 51%;
+  --secondary: 0 0% 96%;
+  --secondary-foreground: 0 0% 13%;
+  --muted: 0 0% 97%;
+  --muted-foreground: 0 0% 45%;
+  --accent: 0 0% 95%;
+  --accent-foreground: 0 0% 13%;
+  --destructive: 0 0% 12%;
   --destructive-foreground: 0 0% 100%;
-  --border: 214 32% 88%;
-  --input: 214 32% 88%;
-  --ring: 221 83% 53%;
+  --border: 0 0% 90%;
+  --input: 0 0% 95%;
+  --ring: 0 0% 10%;
 }
 
 * {
@@ -59,8 +61,10 @@ body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    -apple-system, BlinkMacSystemFont, Inter, ui-sans-serif, "Segoe UI",
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
 }
 
 button,
@@ -68,6 +72,11 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+button:not(:disabled),
+[role="button"]:not(:disabled) {
+  cursor: pointer;
 }
 
 @layer utilities {
@@ -118,19 +127,186 @@ select {
   .text-primary-foreground {
     color: hsl(var(--primary-foreground));
   }
+
+  .font-heading {
+    font-family: var(--font-heading);
+  }
 }
 
 .app-grid {
-  display: grid;
-  grid-template-columns: 232px minmax(760px, 1fr) 332px;
+  display: block;
+}
+
+.jobflow-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 20;
+  display: flex;
+  width: 320px;
+  min-height: 100vh;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow-y: auto;
+  padding: 24px;
+  background: hsl(var(--background));
+}
+
+.sidebar-row {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  overflow: hidden;
+  border-radius: 14px;
+  padding: 0 14px;
+  text-align: left;
+  font-size: 17px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.sidebar-row svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 2;
+}
+
+.sidebar-row:hover:not(:disabled) {
+  color: hsl(var(--foreground));
+}
+
+.sidebar-row-muted:hover:not(:disabled) {
+  background: hsl(var(--secondary));
+}
+
+.sidebar-row:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.sidebar-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.sidebar-row-selected {
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.sidebar-row-muted {
+  background: transparent;
+}
+
+.sidebar-active-pill {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background: hsl(var(--secondary));
+}
+
+.sidebar-row-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.jobflow-main {
+  min-height: 100vh;
+  margin-left: 320px;
+  min-width: 0;
+  overflow: auto;
+  padding: 72px 96px 56px;
+}
+
+.jobflow-main-inner {
+  margin: 0 auto;
+  max-width: 1188px;
+}
+
+.jobflow-status-row {
+  margin-bottom: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+select,
+textarea {
+  border-color: transparent !important;
+  border-radius: 16px !important;
+  background-color: hsl(var(--input)) !important;
+  font-size: 14px !important;
+}
+
+select {
+  min-height: 48px;
+}
+
+textarea {
+  line-height: 1.55;
 }
 
 @media (max-width: 1180px) {
-  .app-grid {
-    grid-template-columns: 72px minmax(620px, 1fr);
+  .jobflow-sidebar {
+    width: 84px;
+    padding-inline: 16px;
   }
 
-  .assistant-rail {
-    display: none;
+  .jobflow-main {
+    margin-left: 84px;
+    padding: 64px 32px 48px;
+  }
+}
+
+@media (max-width: 760px) {
+  .jobflow-sidebar {
+    position: sticky;
+    top: 0;
+    bottom: auto;
+    width: 100%;
+    min-height: auto;
+    overflow-x: auto;
+    overflow-y: visible;
+    border-bottom: 1px solid hsl(var(--border));
+    padding: 14px;
+  }
+
+  .jobflow-sidebar nav {
+    margin-top: 0;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .sidebar-row {
+    width: auto;
+    min-height: 42px;
+    padding: 0 12px;
+    white-space: nowrap;
+    font-size: 14px;
+  }
+
+  .sidebar-row-content {
+    gap: 8px;
+  }
+
+  .jobflow-main {
+    margin-left: 0;
+    padding: 36px 18px;
+  }
+
+  .jobflow-status-row {
+    align-items: flex-start;
+    flex-direction: column;
+    margin-bottom: 28px;
   }
 }

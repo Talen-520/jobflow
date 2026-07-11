@@ -111,6 +111,10 @@ class Preferences(BaseModel):
     final_submission_mode: Literal["manual_only"] = "manual_only"
     fill_sensitive_fields: bool = False
     fill_eeo_fields: bool = False
+    ai_provider: Literal["ollama", "deepseek", "openai", "gemini", "custom"] = "ollama"
+    ai_model: str = "llama3.1:8b"
+    ai_api_key: str = ""
+    ai_base_url: str = ""
     open_answer_style: str = "concise_professional"
     open_answer_max_words: int = 180
     salary_answer_policy: Literal["ask_user", "leave_blank", "use_profile"] = "ask_user"

@@ -111,6 +111,14 @@ def test_demo_pages_are_served_for_manual_qa(tmp_path: Path) -> None:
     assert "data-jobflow-demo=\"application\"" in application_response.text
     assert "Submit application manually" in application_response.text
 
+    greenhouse_response = client.get("/demo/greenhouse/application")
+    assert greenhouse_response.status_code == 200
+    assert "data-ats=\"greenhouse\"" in greenhouse_response.text
+
+    lever_response = client.get("/demo/lever/application")
+    assert lever_response.status_code == 200
+    assert "application-form" in lever_response.text
+
     submitted_get_response = client.get("/demo/submitted")
     assert submitted_get_response.status_code == 200
     assert "Application submitted" in submitted_get_response.text
@@ -118,6 +126,27 @@ def test_demo_pages_are_served_for_manual_qa(tmp_path: Path) -> None:
     submitted_post_response = client.post("/demo/submitted")
     assert submitted_post_response.status_code == 200
     assert "Thank you for applying" in submitted_post_response.text
+
+
+def test_preferences_store_model_connection_settings(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+    preferences = Preferences(
+        ai_provider="deepseek",
+        ai_model="deepseek-v4-flash",
+        ai_api_key="local-test-key",
+        ai_base_url="https://api.deepseek.com",
+    )
+
+    put_response = client.put("/preferences", json=preferences.model_dump(mode="json"))
+    assert put_response.status_code == 200
+
+    get_response = client.get("/preferences")
+    assert get_response.status_code == 200
+    saved = get_response.json()
+    assert saved["ai_provider"] == "deepseek"
+    assert saved["ai_model"] == "deepseek-v4-flash"
+    assert saved["ai_api_key"] == "local-test-key"
+    assert saved["ai_base_url"] == "https://api.deepseek.com"
 
 
 def test_document_import_open_answer_and_data_export(tmp_path: Path) -> None:
@@ -228,6 +257,82 @@ def test_document_delete_removes_profile_reference_and_vault_file(
 
     missing_response = client.delete(f"/documents/{document['id']}")
     assert missing_response.status_code == 404
+
+
+def test_resume_import_replaces_previous_resume_reference_and_vault_file(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+    first_resume = tmp_path / "first-resume.pdf"
+    second_resume = tmp_path / "second-resume.pdf"
+    first_resume.write_bytes(b"%PDF-1.4 first")
+    second_resume.write_bytes(b"%PDF-1.4 second")
+
+    first_response = client.post(
+        "/documents/import",
+        json={"kind": "resume", "name": "First Resume", "path": str(first_resume)},
+    )
+    assert first_response.status_code == 200
+    first_document = first_response.json()
+    first_vault_path = Path(first_document["path"])
+    assert first_vault_path.exists()
+
+    second_response = client.post(
+        "/documents/import",
+        json={"kind": "resume", "name": "Second Resume", "path": str(second_resume)},
+    )
+    assert second_response.status_code == 200
+    second_document = second_response.json()
+
+    profile_response = client.get("/profile")
+    assert profile_response.status_code == 200
+    resumes = [
+        document
+        for document in profile_response.json()["documents"]
+        if document["kind"] == "resume"
+    ]
+    assert [document["id"] for document in resumes] == [second_document["id"]]
+    assert Path(second_document["path"]).exists()
+    assert not first_vault_path.exists()
+
+
+def test_resume_upload_replaces_previous_resume_reference_and_vault_file(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+
+    first_response = client.post(
+        "/documents/upload",
+        params={"kind": "resume", "name": "First Resume", "filename": "first.pdf"},
+        content=b"%PDF-1.4 first uploaded resume",
+        headers={"content-type": "application/pdf"},
+    )
+    assert first_response.status_code == 200
+    first_document = first_response.json()
+    first_vault_path = Path(first_document["path"])
+    assert first_vault_path.exists()
+    assert first_vault_path.read_bytes() == b"%PDF-1.4 first uploaded resume"
+
+    second_response = client.post(
+        "/documents/upload",
+        params={"kind": "resume", "name": "Second Resume", "filename": "second.pdf"},
+        content=b"%PDF-1.4 second uploaded resume",
+        headers={"content-type": "application/pdf"},
+    )
+    assert second_response.status_code == 200
+    second_document = second_response.json()
+
+    profile_response = client.get("/profile")
+    assert profile_response.status_code == 200
+    resumes = [
+        document
+        for document in profile_response.json()["documents"]
+        if document["kind"] == "resume"
+    ]
+    assert [document["id"] for document in resumes] == [second_document["id"]]
+    assert Path(second_document["path"]).exists()
+    assert Path(second_document["path"]).read_bytes() == b"%PDF-1.4 second uploaded resume"
+    assert not first_vault_path.exists()
 
 
 def test_document_delete_does_not_remove_external_profile_file(

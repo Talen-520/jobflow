@@ -77,6 +77,10 @@ export type Preferences = {
   final_submission_mode: "manual_only";
   fill_sensitive_fields: boolean;
   fill_eeo_fields: boolean;
+  ai_provider: "ollama" | "deepseek" | "openai" | "gemini" | "custom";
+  ai_model: string;
+  ai_api_key: string;
+  ai_base_url: string;
   open_answer_style: string;
   open_answer_max_words: number;
   salary_answer_policy: "ask_user" | "leave_blank" | "use_profile";
@@ -286,6 +290,10 @@ export const defaultPreferences: Preferences = {
   final_submission_mode: "manual_only",
   fill_sensitive_fields: false,
   fill_eeo_fields: false,
+  ai_provider: "ollama",
+  ai_model: "llama3.1:8b",
+  ai_api_key: "",
+  ai_base_url: "",
   open_answer_style: "concise_professional",
   open_answer_max_words: 180,
   salary_answer_policy: "ask_user",
@@ -316,6 +324,30 @@ export function getDemoApplicationUrl(): string {
   url.search = "";
   return url.toString();
 }
+
+export type TestApplicationLink = {
+  label: string;
+  provider: "greenhouse" | "oracle" | "ashby";
+  url: string;
+};
+
+export const testApplicationLinks: TestApplicationLink[] = [
+  {
+    label: "Greenhouse test",
+    provider: "greenhouse",
+    url: "https://job-boards.greenhouse.io/getbuilt/jobs/4713164005",
+  },
+  {
+    label: "Oracle test",
+    provider: "oracle",
+    url: "https://ibqbjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/Honeywell/jobs/preview/135537/apply/email?keyword=software&mode=location",
+  },
+  {
+    label: "Ashby test",
+    provider: "ashby",
+    url: "https://www.ashbyhq.com/careers?ashby_jid=448baa35-cd72-468a-bcab-51dd55b7a275",
+  },
+];
 
 export async function listEventHistory(
   limit = 20,
@@ -468,6 +500,30 @@ export async function importDocument(request: {
   });
   if (!response.ok) {
     throw new Error(`Document import failed: ${response.status}`);
+  }
+  return response.json() as Promise<DocumentRecord>;
+}
+
+export async function uploadDocument(
+  file: File,
+  request: {
+    kind: "resume" | "cover_letter" | "other";
+    name?: string;
+  },
+): Promise<DocumentRecord> {
+  const url = new URL(`${API_BASE}/documents/upload`);
+  url.searchParams.set("kind", request.kind);
+  url.searchParams.set("name", request.name?.trim() || file.name);
+  url.searchParams.set("filename", file.name);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+  if (!response.ok) {
+    throw new Error(`Document upload failed: ${response.status}`);
   }
   return response.json() as Promise<DocumentRecord>;
 }
