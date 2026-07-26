@@ -369,6 +369,15 @@
     const actual = clean(actualValue).toLowerCase();
     const expected = clean(expectedValue).toLowerCase();
     if (!actual || !expected) return actual === expected;
+    const actualDigits = actual.replace(/\D/g, "");
+    const expectedDigits = expected.replace(/\D/g, "");
+    if (
+      expectedDigits.length >= 7 &&
+      actualDigits.length >= expectedDigits.length &&
+      actualDigits.endsWith(expectedDigits)
+    ) {
+      return true;
+    }
     return actual === expected || (expected.length >= 3 && actual.includes(expected));
   }
 
@@ -453,6 +462,35 @@
     return new Promise((resolve) => schedule(resolve, delay));
   }
 
+  function openChoiceMenu(element, documentObject) {
+    element.focus?.();
+    const control =
+      element.closest?.(
+        ".select__control, [class*='select__control'], [class*='-control']",
+      ) || element;
+    const MouseEventConstructor =
+      documentObject?.defaultView?.MouseEvent || globalThis.MouseEvent;
+    if (MouseEventConstructor && control.dispatchEvent) {
+      control.dispatchEvent(
+        new MouseEventConstructor("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: 1,
+        }),
+      );
+      control.dispatchEvent(
+        new MouseEventConstructor("mouseup", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    }
+    element.click();
+    element.focus?.();
+  }
+
   function choiceOptionRoots(element, documentObject) {
     const ids = [
       ...clean(element.getAttribute?.("aria-controls")).split(/\s+/),
@@ -477,7 +515,13 @@
       : Array.from(documentObject.querySelectorAll(optionSelector));
     return candidates.filter((candidate) => {
       const view = candidate.ownerDocument?.defaultView;
-      return !view?.getComputedStyle || view.getComputedStyle(candidate).display !== "none";
+      if (candidate.closest?.("[hidden], [aria-hidden='true']")) return false;
+      if (candidate.getClientRects && candidate.getClientRects().length === 0) {
+        return false;
+      }
+      if (!view?.getComputedStyle) return true;
+      const style = view.getComputedStyle(candidate);
+      return style.display !== "none" && style.visibility !== "hidden";
     });
   }
 
@@ -595,7 +639,7 @@
       ) {
         return true;
       }
-      element.click();
+      openChoiceMenu(element, documentObject);
       if (searchableCombobox) {
         setNativeValue(element, String(item.value), false);
       }

@@ -358,6 +358,90 @@ test("custom combobox selects only from its associated listbox", async () => {
   assert.equal(result.error_count, 0);
 });
 
+test("custom combobox opens a React Select control through mouse down", async () => {
+  let opened = false;
+  let optionClicked = false;
+  class FakeMouseEvent {
+    constructor(type) {
+      this.type = type;
+    }
+  }
+  const option = {
+    textContent: "LinkedIn",
+    click() {
+      optionClicked = true;
+    },
+  };
+  const listbox = {
+    querySelectorAll() {
+      return [option];
+    },
+  };
+  const control = {
+    dispatchEvent(event) {
+      if (event.type === "mousedown") opened = true;
+    },
+  };
+  const combobox = {
+    id: "source",
+    tagName: "INPUT",
+    textContent: "",
+    value: "",
+    dispatchEvent() {},
+    focus() {},
+    getAttribute(name) {
+      return name === "role" ? "combobox" : "";
+    },
+    closest() {
+      return control;
+    },
+    click() {},
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout, MouseEvent: FakeMouseEvent },
+    getElementById(id) {
+      return opened && id === "react-select-source-listbox" ? listbox : null;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === "#source" ? [combobox] : [];
+    },
+  };
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "source",
+          action: "select",
+          value: "LinkedIn",
+          confidence: 0.95,
+          needs_review: false,
+          source_refs: ["profile.preferences.source"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "source",
+          type: "select",
+          selector: "#source",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(opened, true);
+  assert.equal(optionClicked, true);
+  assert.equal(result.error_count, 0);
+});
+
 test("custom combobox does not treat uncommitted search text as selected", async () => {
   let clickCount = 0;
   const combobox = {
@@ -455,6 +539,12 @@ test("document payload from the extension background decodes to bytes", () => {
 test("text verification accepts location normalization but rejects empty values", () => {
   assert.equal(textValueMatches("New York, NY", "New York"), true);
   assert.equal(textValueMatches("", "New York"), false);
+});
+
+test("text verification accepts formatted phone numbers and country codes", () => {
+  assert.equal(textValueMatches("(929) 421-5876", "9294215876"), true);
+  assert.equal(textValueMatches("+1 929-421-5876", "9294215876"), true);
+  assert.equal(textValueMatches("929-421-5000", "9294215876"), false);
 });
 
 test("Ashby embedded application derives company from the frame URL", () => {
