@@ -328,8 +328,11 @@ DOM_EXTRACTION_SCRIPT = r"""
   ));
   controls.forEach((control, index) => {
     const type = clean(control.getAttribute('type')).toLowerCase();
+    const role = clean(control.getAttribute('role')).toLowerCase();
+    const popup = clean(control.getAttribute('aria-haspopup')).toLowerCase();
     const identityText = `${control.id} ${control.getAttribute('name') || ''} ${control.getAttribute('aria-label') || ''} ${control.getAttribute('data-automation-id') || ''} ${type}`.toLowerCase();
-    if (['hidden', 'submit', 'button', 'reset', 'search'].includes(type)) return;
+    if (['hidden', 'submit', 'reset', 'search'].includes(type)) return;
+    if (type === 'button' && role !== 'combobox' && popup !== 'listbox') return;
     if ((config.ignoreTokens || []).some(token => identityText.includes(token))) return;
     if (control.disabled) return;
     const container = config.fieldContainerSelector ? control.closest(config.fieldContainerSelector) : null;

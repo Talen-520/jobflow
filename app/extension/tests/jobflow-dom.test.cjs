@@ -10,6 +10,7 @@ const {
   ashbyRadioGroup,
   decodeDocumentPayload,
   eligiblePlanItems,
+  ignoredNativeControlType,
   recordHints,
   textValueMatches,
   waitForChoiceState,
@@ -145,6 +146,28 @@ test("custom combobox values accept boolean Yes and No aliases", () => {
   assert.deepEqual(choiceValueAliases("True"), ["yes", "true"]);
   assert.deepEqual(choiceValueAliases("false"), ["no", "false"]);
   assert.deepEqual(choiceValueAliases("LinkedIn"), ["linkedin"]);
+});
+
+test("Workday listbox buttons are retained while ordinary buttons are ignored", () => {
+  const control = (attributes) => ({
+    getAttribute(name) {
+      return attributes[name] || "";
+    },
+  });
+
+  assert.equal(
+    ignoredNativeControlType(
+      control({ type: "button", "aria-haspopup": "listbox" }),
+    ),
+    false,
+  );
+  assert.equal(ignoredNativeControlType(control({ type: "button" })), true);
+  assert.equal(ignoredNativeControlType(control({ type: "submit" })), true);
+});
+
+test("Workday state choices accept US postal abbreviations", () => {
+  assert.deepEqual(choiceValueAliases("NY"), ["ny", "new york"]);
+  assert.deepEqual(choiceValueAliases("VA"), ["va", "virginia"]);
 });
 
 test("custom combobox waits for and selects one descriptive location option", async () => {

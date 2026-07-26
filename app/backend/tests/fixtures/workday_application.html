@@ -13,6 +13,18 @@
         <label for="input-5">Phone Number</label>
         <input id="input-5" data-automation-id="phone" type="tel" />
 
+        <div data-automation-id="formField-country">
+          <label id="country-label">Country / Territory</label>
+          <button type="button" data-automation-id="country" aria-haspopup="listbox"
+            aria-labelledby="country-label" aria-required="true">United States of America</button>
+        </div>
+
+        <div data-automation-id="formField-state">
+          <label id="state-label">State</label>
+          <button type="button" data-automation-id="state" aria-haspopup="listbox"
+            aria-labelledby="state-label" aria-required="true">Select One</button>
+        </div>
+
         <label for="input-6">Will you require sponsorship?</label>
         <select id="input-6" data-automation-id="sponsorship">
           <option value="">Select one</option>

@@ -7,6 +7,60 @@
     '[data-sitekey]',
   ];
 
+  const US_STATE_NAMES = {
+    AL: "Alabama",
+    AK: "Alaska",
+    AZ: "Arizona",
+    AR: "Arkansas",
+    CA: "California",
+    CO: "Colorado",
+    CT: "Connecticut",
+    DE: "Delaware",
+    FL: "Florida",
+    GA: "Georgia",
+    HI: "Hawaii",
+    ID: "Idaho",
+    IL: "Illinois",
+    IN: "Indiana",
+    IA: "Iowa",
+    KS: "Kansas",
+    KY: "Kentucky",
+    LA: "Louisiana",
+    ME: "Maine",
+    MD: "Maryland",
+    MA: "Massachusetts",
+    MI: "Michigan",
+    MN: "Minnesota",
+    MS: "Mississippi",
+    MO: "Missouri",
+    MT: "Montana",
+    NE: "Nebraska",
+    NV: "Nevada",
+    NH: "New Hampshire",
+    NJ: "New Jersey",
+    NM: "New Mexico",
+    NY: "New York",
+    NC: "North Carolina",
+    ND: "North Dakota",
+    OH: "Ohio",
+    OK: "Oklahoma",
+    OR: "Oregon",
+    PA: "Pennsylvania",
+    RI: "Rhode Island",
+    SC: "South Carolina",
+    SD: "South Dakota",
+    TN: "Tennessee",
+    TX: "Texas",
+    UT: "Utah",
+    VT: "Vermont",
+    VA: "Virginia",
+    WA: "Washington",
+    WV: "West Virginia",
+    WI: "Wisconsin",
+    WY: "Wyoming",
+    DC: "District of Columbia",
+  };
+
   const ATS_CONFIGS = {
     greenhouse: {
       hosts: ["greenhouse.io"],
@@ -109,6 +163,14 @@
       return type;
     }
     return type ? "unknown" : "text";
+  }
+
+  function ignoredNativeControlType(control) {
+    const type = clean(control.getAttribute("type")).toLowerCase();
+    const role = clean(control.getAttribute("role")).toLowerCase();
+    const popup = clean(control.getAttribute("aria-haspopup")).toLowerCase();
+    if (["hidden", "submit", "reset", "search"].includes(type)) return true;
+    return type === "button" && role !== "combobox" && popup !== "listbox";
   }
 
   function labelFor(control, container, documentObject) {
@@ -283,8 +345,7 @@
       ),
     );
     controls.forEach((control, index) => {
-      const nativeType = clean(control.getAttribute("type")).toLowerCase();
-      if (["hidden", "submit", "button", "reset", "search"].includes(nativeType)) return;
+      if (ignoredNativeControlType(control)) return;
       if (control.disabled || /captcha|honeypot|beecatcher/i.test(`${control.id} ${control.name}`)) return;
       const type = fieldType(control);
       const radioGroup =
@@ -454,6 +515,8 @@
     if (["false", "no", "n", "0"].includes(normalized)) {
       return ["no", "false"];
     }
+    const stateName = US_STATE_NAMES[clean(value).toUpperCase()];
+    if (stateName) return [normalized, stateName.toLowerCase()];
     return [normalized];
   }
 
@@ -734,6 +797,7 @@
     detectAts,
     eligiblePlanItems,
     extractForm,
+    ignoredNativeControlType,
     recordHints,
     textValueMatches,
     waitForChoiceState,

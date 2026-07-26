@@ -90,6 +90,9 @@ def test_workday_prefers_data_automation_ids_and_excludes_beecatcher() -> None:
 
         assert fields["email"].selector == '[data-automation-id="email"]'
         assert fields["sponsorship"].options == ["No", "Yes"]
+        assert fields["country"].type.value == "select"
+        assert fields["state"].selector == '[data-automation-id="state"]'
+        assert fields["state"].required is True
         assert fields["password"].sensitive is True
         assert "beecatcher" not in fields
         assert form.job_title_hint == "Software Engineer"

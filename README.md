@@ -135,7 +135,7 @@ Verification evidence:
 ## Current Extension Verification
 
 - Backend suite: `84 passed`.
-- Extension JavaScript syntax checks and `23` extension tests: passed.
+- Extension JavaScript syntax checks and `25` extension tests: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
   simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.
