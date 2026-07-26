@@ -278,6 +278,86 @@ test("custom combobox polls for asynchronously loaded options", async () => {
   assert.equal(result.error_count, 0);
 });
 
+test("custom combobox selects only from its associated listbox", async () => {
+  let sourceClicked = false;
+  let countryClicked = false;
+  const countryOption = {
+    textContent: "Afghanistan +93",
+    click() {
+      countryClicked = true;
+    },
+  };
+  const sourceOption = {
+    textContent: "LinkedIn",
+    click() {
+      sourceClicked = true;
+    },
+  };
+  const sourceListbox = {
+    querySelectorAll() {
+      return [sourceOption];
+    },
+  };
+  const combobox = {
+    id: "source",
+    tagName: "INPUT",
+    textContent: "",
+    value: "",
+    dispatchEvent() {},
+    getAttribute(name) {
+      if (name === "role") return "combobox";
+      if (name === "aria-controls") return "react-select-source-listbox";
+      return "";
+    },
+    click() {},
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout },
+    getElementById(id) {
+      return id === "react-select-source-listbox" ? sourceListbox : null;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "#source") return [combobox];
+      if (selector.includes('[role="option"]')) return [countryOption, sourceOption];
+      return [];
+    },
+  };
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "source",
+          action: "select",
+          value: "LinkedIn",
+          confidence: 0.95,
+          needs_review: false,
+          source_refs: ["profile.preferences.source"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "source",
+          type: "select",
+          selector: "#source",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(sourceClicked, true);
+  assert.equal(countryClicked, false);
+  assert.equal(result.error_count, 0);
+});
+
 test("custom combobox does not treat uncommitted search text as selected", async () => {
   let clickCount = 0;
   const combobox = {

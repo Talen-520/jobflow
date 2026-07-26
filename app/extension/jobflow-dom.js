@@ -453,12 +453,29 @@
     return new Promise((resolve) => schedule(resolve, delay));
   }
 
-  function visibleChoiceOptions(documentObject) {
-    return Array.from(
-      documentObject.querySelectorAll(
-        '[role="option"], [id*="-option-"], .select__option',
-      ),
-    ).filter((candidate) => {
+  function choiceOptionRoots(element, documentObject) {
+    const ids = [
+      ...clean(element.getAttribute?.("aria-controls")).split(/\s+/),
+      ...clean(element.getAttribute?.("aria-owns")).split(/\s+/),
+    ].filter(Boolean);
+    if (element.id) ids.push(`react-select-${element.id}-listbox`);
+    const roots = ids
+      .map((id) => documentObject.getElementById?.(id))
+      .filter(Boolean);
+    const nearbyRoot = element
+      .closest?.(".select-shell, .select__container, [class*='select-container']")
+      ?.querySelector?.('[role="listbox"], [id*="-listbox"], .select__menu');
+    if (nearbyRoot) roots.push(nearbyRoot);
+    return [...new Set(roots)];
+  }
+
+  function visibleChoiceOptions(documentObject, element) {
+    const roots = choiceOptionRoots(element, documentObject);
+    const optionSelector = '[role="option"], [id*="-option-"], .select__option';
+    const candidates = roots.length
+      ? roots.flatMap((root) => Array.from(root.querySelectorAll(optionSelector)))
+      : Array.from(documentObject.querySelectorAll(optionSelector));
+    return candidates.filter((candidate) => {
       const view = candidate.ownerDocument?.defaultView;
       return !view?.getComputedStyle || view.getComputedStyle(candidate).display !== "none";
     });
@@ -466,11 +483,12 @@
 
   async function waitForMatchingChoice(
     documentObject,
+    element,
     expectedValues,
     attempts = 20,
   ) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const options = visibleChoiceOptions(documentObject);
+      const options = visibleChoiceOptions(documentObject, element);
       const match = options.find((candidate) =>
         expectedValues.some((expected) =>
           choiceTextMatches(candidate.textContent, expected),
@@ -479,7 +497,7 @@
       if (match) return { match, options };
       if (attempt < attempts - 1) await waitForChoiceState(documentObject, 150);
     }
-    return { match: null, options: visibleChoiceOptions(documentObject) };
+    return { match: null, options: visibleChoiceOptions(documentObject, element) };
   }
 
   function committedChoiceText(element) {
@@ -584,6 +602,7 @@
       await waitForChoiceState(documentObject, searchableCombobox ? 120 : 80);
       const { match: option, options } = await waitForMatchingChoice(
         documentObject,
+        element,
         expectedValues,
       );
       if (!option) {
