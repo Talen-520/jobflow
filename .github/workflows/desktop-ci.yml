@@ -1,0 +1,30 @@
+name: Desktop CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - run: npm run desktop:build
+      - name: Create external-binary placeholder for Rust contract check
+        run: |
+          target=$(rustc --print host-tuple)
+          mkdir -p app/desktop/src-tauri/binaries
+          touch "app/desktop/src-tauri/binaries/jobflow-backend-$target"
+          chmod +x "app/desktop/src-tauri/binaries/jobflow-backend-$target"
+      - run: cargo check --locked
+        working-directory: app/desktop/src-tauri

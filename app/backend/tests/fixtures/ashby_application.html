@@ -1,20 +1,38 @@
 <html>
   <body data-ashby-page="application">
-    <form id="ashby-application-form">
-      <label for="firstName">First Name</label>
-      <input id="firstName" name="firstName" required />
+    <form id="ashby-application-form" class="ashby-application-form">
+      <div class="ashby-application-form-field-entry" data-field-path="_systemfield_name">
+        <label for="_systemfield_name">Name</label>
+        <input id="_systemfield_name" name="_systemfield_name" data-field-path="_systemfield_name" required />
+      </div>
 
-      <label for="lastName">Last Name</label>
-      <input id="lastName" name="lastName" required />
+      <div class="ashby-application-form-field-entry" data-field-path="_systemfield_email">
+        <label for="_systemfield_email">Email</label>
+        <input id="_systemfield_email" name="_systemfield_email" data-field-path="_systemfield_email" type="email" required />
+      </div>
 
-      <label for="email">Email</label>
-      <input id="email" name="email" type="email" required />
+      <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">
+        <label for="_systemfield_resume">Resume</label>
+        <input id="_systemfield_resume" data-field-path="_systemfield_resume" type="file" />
+      </div>
 
-      <label for="resume">Resume</label>
-      <input id="resume" name="resume" type="file" />
+      <div class="ashby-application-form-field-entry" data-field-path="work-location">
+        <label for="work-location">Which country do you intend to work from?</label>
+        <input id="work-location" data-field-path="work-location" role="combobox" data-options="Canada|United States" required />
+      </div>
+
+      <fieldset class="ashby-application-form-field-entry" data-field-path="sponsorship">
+        <legend>Will you require sponsorship?</legend>
+        <label for="sponsorship_yes">Yes</label>
+        <input id="sponsorship_yes" name="sponsorship" type="radio" value="Yes" />
+        <label for="sponsorship_no">No</label>
+        <input id="sponsorship_no" name="sponsorship" type="radio" value="No" />
+      </fieldset>
 
       <label for="why">Why are you interested?</label>
       <textarea id="why" name="why"></textarea>
+
+      <textarea id="g-recaptcha-response" name="g-recaptcha-response"></textarea>
     </form>
   </body>
 </html>

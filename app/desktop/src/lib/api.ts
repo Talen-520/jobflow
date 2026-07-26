@@ -4,17 +4,25 @@ export const API_BASE =
 export type Health = {
   status: "ok";
   service: string;
+  protocol_version: number;
 };
 
 export type Profile = {
   identity: {
     first_name: string;
+    middle_name: string;
     last_name: string;
     preferred_name: string;
     email: string;
     phone: string;
+    phone_country_code: string;
+    phone_extension: string;
     location: string;
     address: string;
+    address_line2: string;
+    state: string;
+    postal_code: string;
+    country: string;
   };
   links: {
     linkedin: string;
@@ -79,7 +87,6 @@ export type Preferences = {
   fill_eeo_fields: boolean;
   ai_provider: "ollama" | "deepseek" | "openai" | "gemini" | "custom";
   ai_model: string;
-  ai_api_key: string;
   ai_base_url: string;
   open_answer_style: string;
   open_answer_max_words: number;
@@ -87,6 +94,14 @@ export type Preferences = {
   relocation_policy: "ask_user" | "leave_blank" | "use_profile";
   missing_fact_policy: "ask_user" | "leave_blank";
   low_confidence_policy: "pause" | "leave_blank";
+};
+
+export type RemoteAIProvider = Exclude<Preferences["ai_provider"], "ollama">;
+
+export type CredentialStatus = {
+  provider: RemoteAIProvider;
+  configured: boolean;
+  storage: string;
 };
 
 export type FormField = {
@@ -159,9 +174,22 @@ export type FillResult = {
 };
 
 export type BrowserState = {
-  status: "started" | "stopped" | "not_started" | "opened" | "error";
+  status: "started" | "stopped" | "not_started" | "opened" | "connected" | "error";
   url: string;
   message: string;
+};
+
+export type ExtensionStatus = {
+  connected: boolean;
+  url: string;
+  title: string;
+  extension_version: string;
+  captcha_detected: boolean;
+  form_detected: boolean;
+  field_count: number;
+  ats: string;
+  form_url: string;
+  pairing_token: string;
 };
 
 export type AutomationEvent = {
@@ -230,6 +258,7 @@ export type OpenAnswerDraftRequest = {
   question: string;
   question_type?: string;
   keywords?: string[];
+  context_facts?: Record<string, string>;
   max_words?: number;
   use_model?: boolean;
 };
@@ -251,6 +280,7 @@ export type PromptContextPreview = {
 };
 
 export type DataExport = {
+  schema_version: 1;
   profile: Profile;
   preferences: Preferences;
   applications: ApplicationRecord[];
@@ -259,12 +289,19 @@ export type DataExport = {
 export const emptyProfile: Profile = {
   identity: {
     first_name: "",
+    middle_name: "",
     last_name: "",
     preferred_name: "",
     email: "",
     phone: "",
+    phone_country_code: "",
+    phone_extension: "",
     location: "",
     address: "",
+    address_line2: "",
+    state: "",
+    postal_code: "",
+    country: "",
   },
   links: {
     linkedin: "",
@@ -272,7 +309,7 @@ export const emptyProfile: Profile = {
     portfolio: "",
   },
   work_authorization: {
-    country: "",
+    country: "US",
     authorized: null,
     requires_sponsorship: null,
     notes: "",
@@ -288,11 +325,10 @@ export const emptyProfile: Profile = {
 
 export const defaultPreferences: Preferences = {
   final_submission_mode: "manual_only",
-  fill_sensitive_fields: false,
-  fill_eeo_fields: false,
+  fill_sensitive_fields: true,
+  fill_eeo_fields: true,
   ai_provider: "ollama",
   ai_model: "llama3.1:8b",
-  ai_api_key: "",
   ai_base_url: "",
   open_answer_style: "concise_professional",
   open_answer_max_words: 180,
@@ -317,37 +353,6 @@ export function getEventsUrl(): string {
   url.search = "";
   return url.toString();
 }
-
-export function getDemoApplicationUrl(): string {
-  const url = new URL(API_BASE);
-  url.pathname = "/demo/application";
-  url.search = "";
-  return url.toString();
-}
-
-export type TestApplicationLink = {
-  label: string;
-  provider: "greenhouse" | "oracle" | "ashby";
-  url: string;
-};
-
-export const testApplicationLinks: TestApplicationLink[] = [
-  {
-    label: "Greenhouse test",
-    provider: "greenhouse",
-    url: "https://job-boards.greenhouse.io/getbuilt/jobs/4713164005",
-  },
-  {
-    label: "Oracle test",
-    provider: "oracle",
-    url: "https://ibqbjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/Honeywell/jobs/preview/135537/apply/email?keyword=software&mode=location",
-  },
-  {
-    label: "Ashby test",
-    provider: "ashby",
-    url: "https://www.ashbyhq.com/careers?ashby_jid=448baa35-cd72-468a-bcab-51dd55b7a275",
-  },
-];
 
 export async function listEventHistory(
   limit = 20,
@@ -424,6 +429,44 @@ export async function putPreferences(preferences: Preferences): Promise<Preferen
     throw new Error(`Preferences save failed: ${response.status}`);
   }
   return response.json() as Promise<Preferences>;
+}
+
+export async function getCredentialStatus(
+  provider: RemoteAIProvider,
+  signal?: AbortSignal,
+): Promise<CredentialStatus> {
+  const response = await fetch(`${API_BASE}/credentials/${provider}`, { signal });
+  if (!response.ok) {
+    throw new Error(`Credential status failed: ${response.status}`);
+  }
+  return response.json() as Promise<CredentialStatus>;
+}
+
+export async function putCredential(
+  provider: RemoteAIProvider,
+  apiKey: string,
+): Promise<CredentialStatus> {
+  const response = await fetch(`${API_BASE}/credentials/${provider}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!response.ok) {
+    throw new Error(`Credential save failed: ${response.status}`);
+  }
+  return response.json() as Promise<CredentialStatus>;
+}
+
+export async function deleteCredential(
+  provider: RemoteAIProvider,
+): Promise<CredentialStatus> {
+  const response = await fetch(`${API_BASE}/credentials/${provider}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Credential removal failed: ${response.status}`);
+  }
+  return response.json() as Promise<CredentialStatus>;
 }
 
 export async function listApplications(
@@ -560,16 +603,17 @@ export async function importData(payload: DataExport): Promise<DataExport> {
   return response.json() as Promise<DataExport>;
 }
 
-export async function openBrowser(url: string): Promise<BrowserState> {
-  const response = await fetch(`${API_BASE}/browser/open`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
+export async function getExtensionStatus(
+  includePairingToken = false,
+  signal?: AbortSignal,
+): Promise<ExtensionStatus> {
+  const url = new URL(`${API_BASE}/extension/status`);
+  url.searchParams.set("include_pairing_token", String(includePairingToken));
+  const response = await fetch(url, { signal });
   if (!response.ok) {
-    throw new Error(`Browser open failed: ${response.status}`);
+    throw new Error(`Chrome extension status failed: ${response.status}`);
   }
-  return response.json() as Promise<BrowserState>;
+  return response.json() as Promise<ExtensionStatus>;
 }
 
 export async function stopBrowser(): Promise<BrowserState> {
@@ -622,6 +666,18 @@ export async function createFillPlan(form: FormSchema): Promise<FillPlan> {
   });
   if (!response.ok) {
     throw new Error(`Fill plan creation failed: ${response.status}`);
+  }
+  return response.json() as Promise<FillPlan>;
+}
+
+export async function prepareFillPlan(form: FormSchema): Promise<FillPlan> {
+  const response = await fetch(`${API_BASE}/automation/prepare-fill-plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ form }),
+  });
+  if (!response.ok) {
+    throw new Error(`Fill plan preparation failed: ${response.status}`);
   }
   return response.json() as Promise<FillPlan>;
 }

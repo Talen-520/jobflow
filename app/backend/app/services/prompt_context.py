@@ -273,5 +273,10 @@ class PromptContextService:
                 "visa",
                 "sponsorship",
                 "authorization",
+                "gender",
+                "race",
+                "ethnicity",
+                "veteran",
+                "disability",
             ]
         )

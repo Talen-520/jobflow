@@ -20,7 +20,7 @@ const services = [
       "--port",
       "8765",
     ],
-    env: {},
+    env: { JOBFLOW_MIGRATE_LEGACY: "true" },
   },
   {
     name: useTauri ? "tauri" : "desktop",

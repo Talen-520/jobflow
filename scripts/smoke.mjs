@@ -13,14 +13,15 @@ const smokeDir = await mkdtemp(join(tmpdir(), "jobflow-smoke-"));
 const resumePath = join(smokeDir, "resume.pdf");
 const dbPath = join(smokeDir, "jobflow-smoke.sqlite");
 const vaultPath = join(smokeDir, "vault");
-const browserProfilePath = join(smokeDir, "browser-profile");
 
 let backend;
+let extensionSocket;
 
 try {
   await writeFile(resumePath, "%PDF-1.4 smoke resume\n");
   backend = startBackend();
   await waitForHealth();
+  extensionSocket = await connectExtensionSimulator();
 
   const health = await getJson("/health");
   assert(health.status === "ok", "health endpoint returned ok");
@@ -126,67 +127,30 @@ try {
   );
   assert(plan.blocked_items.some((item) => item.field_id === "salary"), "salary blocked by policy");
   assert(
-    plan.blocked_items.some((item) => item.field_id === "disability"),
-    "disability field gated by default",
-  );
-  assert(
-    plan.blocked_items.some((item) => item.field_id === "veteran"),
-    "veteran field gated by default",
-  );
-
-  await putJson("/preferences", {
-    final_submission_mode: "manual_only",
-    fill_sensitive_fields: false,
-    fill_eeo_fields: true,
-    open_answer_style: "concise_professional",
-    open_answer_max_words: 180,
-    salary_answer_policy: "ask_user",
-    relocation_policy: "ask_user",
-    missing_fact_policy: "ask_user",
-    low_confidence_policy: "pause",
-  });
-  const eeoPlan = await postJson("/automation/create-fill-plan", { form });
-  assert(
-    eeoPlan.items.some(
+    plan.items.some(
       (item) =>
         item.field_id === "disability" &&
         item.value === "No, I do not have a disability" &&
-        item.needs_review === true &&
+        item.needs_review === false &&
         item.source_refs.includes("profile.preferences.disability_status"),
     ),
-    "enabled EEO disability field remains source-backed and review-required",
+    "saved disability value is source-backed and ready",
   );
   assert(
-    eeoPlan.items.some(
+    plan.items.some(
       (item) =>
         item.field_id === "veteran" &&
         item.value === "I am not a protected veteran" &&
-        item.needs_review === true &&
+        item.needs_review === false &&
         item.source_refs.includes("profile.preferences.veteran_status"),
     ),
-    "enabled EEO veteran field remains source-backed and review-required",
+    "saved veteran value is source-backed and ready",
   );
 
   let reviewedPlan = plan;
   reviewedPlan = (
     await postJson("/automation/review-field", {
       field_id: "motivation",
-      decision: "accept",
-      current_plan: reviewedPlan,
-      form,
-    })
-  ).updated_plan;
-  reviewedPlan = (
-    await postJson("/automation/review-field", {
-      field_id: "sponsorship",
-      decision: "accept",
-      current_plan: reviewedPlan,
-      form,
-    })
-  ).updated_plan;
-  reviewedPlan = (
-    await postJson("/automation/review-field", {
-      field_id: "authorized",
       decision: "accept",
       current_plan: reviewedPlan,
       form,
@@ -241,6 +205,29 @@ try {
       title: "Frontend Engineer",
       fields: ["name", "email", "authorized", "urls[LinkedIn]", "resume"],
     },
+    {
+      ats: "ashby",
+      path: "/demo/ashby/application",
+      company: "Ashby Demo Co",
+      title: "Product Engineer",
+      // The protocol simulator sends static HTML. The real extension adds the
+      // button-only sponsorship control through jobflow-dom.js.
+      fields: ["name", "email", "resume"],
+    },
+    {
+      ats: "oracle",
+      path: "/demo/oracle/application",
+      company: "Oracle Demo Co",
+      title: "Cloud Engineer",
+      fields: ["email", "linkedin", "resume"],
+    },
+    {
+      ats: "workday",
+      path: "/demo/workday/application",
+      company: "Workday Demo Co",
+      title: "Software Engineer",
+      fields: ["name", "email", "phone", "sponsorship"],
+    },
   ]) {
     const atsOpened = await postJson("/browser/open", {
       url: `${baseUrl}${atsDemo.path}`,
@@ -263,13 +250,15 @@ try {
       `${atsDemo.ats} demo extracted representative fields`,
     );
     const atsPlan = await postJson("/automation/create-fill-plan", { form: atsForm });
-    assert(
-      atsDemo.fields.every((fieldId) =>
-        atsPlan.items.some(
+    const missingSourceBackedFields = atsDemo.fields.filter(
+      (fieldId) =>
+        !atsPlan.items.some(
           (item) => item.field_id === fieldId && item.source_refs.length > 0,
         ),
-      ),
-      `${atsDemo.ats} demo created source-backed fill plan`,
+    );
+    assert(
+      missingSourceBackedFields.length === 0,
+      `${atsDemo.ats} demo created source-backed fill plan; missing: ${missingSourceBackedFields.join(", ") || "none"}`,
     );
     const atsFill = await postJson("/automation/apply-fill-plan", {
       plan: atsPlan,
@@ -282,35 +271,51 @@ try {
       atsFill.filled_count >= atsDemo.fields.length,
       `${atsDemo.ats} demo filled high-confidence fields`,
     );
+    if (["greenhouse", "ashby", "oracle", "workday"].includes(atsDemo.ats)) {
+      const submitted = await postJson("/browser/open", {
+        url: `${baseUrl}/demo/${atsDemo.ats}/submitted`,
+      });
+      assert(submitted.status === "opened", `${atsDemo.ats} success page opened`);
+      const detected = await postJson("/automation/detect-success", {
+        ats: atsDemo.ats,
+        company_name_hint: atsDemo.company,
+        job_title_hint: atsDemo.title,
+      });
+      assert(detected.detected === true, `${atsDemo.ats} success detected`);
+      assert(
+        detected.signals.some((signal) => signal.startsWith(`${atsDemo.ats}:`)),
+        `${atsDemo.ats} emitted dedicated success signal`,
+      );
+    }
   }
 
   const opened = await postJson("/browser/open", {
     url: `${baseUrl}/demo/application`,
   });
-  assert(opened.status === "opened", "controlled browser opened demo application");
+  assert(opened.status === "opened", "extension bridge opened demo application");
   const browserForm = await postJson("/automation/inspect", {});
   assert(
     browserForm.fields.length >= 14,
-    "controlled browser inspection found demo fields",
+    "extension snapshot inspection found demo fields",
   );
   assert(
     browserForm.company_name_hint === "JobFlow Demo Co",
-    "controlled browser inspection extracted company hint",
+    "extension snapshot extracted company hint",
   );
   assert(
     browserForm.job_title_hint === "Frontend Engineer",
-    "controlled browser inspection extracted job title hint",
+    "extension snapshot extracted job title hint",
   );
   const browserFill = await postJson("/automation/apply-fill-plan", {
     plan: reviewedPlan,
     form: browserForm,
     dry_run: false,
   });
-  assert(browserFill.status === "applied", "safe fill applied in controlled browser");
-  assert(browserFill.error_count === 0, "controlled browser fill verified DOM values");
+  assert(browserFill.status === "applied", "safe fill applied through extension bridge");
+  assert(browserFill.error_count === 0, "extension fill returned verified values");
   assert(
     browserFill.filled_count >= 8,
-    "controlled browser filled eligible source-backed fields",
+    "extension filled eligible source-backed fields",
   );
 
   const submittedHtml = await getText("/demo/submitted");
@@ -328,9 +333,9 @@ try {
   const submittedPage = await postJson("/browser/open", {
     url: `${baseUrl}/demo/submitted`,
   });
-  assert(submittedPage.status === "opened", "controlled browser opened submitted page");
+  assert(submittedPage.status === "opened", "extension bridge opened submitted page");
   const browserSuccess = await postJson("/automation/detect-success", {});
-  assert(browserSuccess.detected === true, "controlled browser success page detected");
+  assert(browserSuccess.detected === true, "extension snapshot success page detected");
   assert(
     browserSuccess.proposed_record?.company_name === "JobFlow Demo Co",
     "browser success proposal includes demo company",
@@ -359,8 +364,13 @@ try {
     "answers snapshot stores source-backed filled fields",
   );
   assert(
-    answersSnapshot.blocked_items.some((item) => item.field_id === "disability"),
-    "answers snapshot stores blocked EEO fields",
+    answersSnapshot.fields.some(
+      (field) =>
+        field.field_id === "disability" &&
+        field.status === "filled" &&
+        field.source_refs.includes("profile.preferences.disability_status"),
+    ),
+    "answers snapshot stores source-backed EEO fields",
   );
 
   const applicationRecord = {
@@ -391,6 +401,7 @@ try {
 
   console.log("\nJobFlow smoke passed");
 } finally {
+  extensionSocket?.close();
   await stopBackend();
 }
 
@@ -417,8 +428,7 @@ function startBackend() {
         ...process.env,
         JOBFLOW_DB_PATH: dbPath,
         JOBFLOW_VAULT_PATH: vaultPath,
-        JOBFLOW_BROWSER_USER_DATA_PATH: browserProfilePath,
-        JOBFLOW_BROWSER_HEADLESS: "true",
+        JOBFLOW_EXTENSION_API_ORIGIN: baseUrl,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -431,6 +441,107 @@ function startBackend() {
     }
   });
   return child;
+}
+
+async function connectExtensionSimulator() {
+  const pairing = await getJson("/extension/status?include_pairing_token=true");
+  const websocketUrl = `ws://127.0.0.1:${port}/extension/ws?token=${encodeURIComponent(pairing.pairing_token)}`;
+  const socket = new WebSocket(websocketUrl);
+  let currentUrl = `${baseUrl}/demo/application`;
+
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Extension simulator timed out")), 5000);
+    socket.addEventListener("open", () => {
+      clearTimeout(timeout);
+      socket.send(JSON.stringify({
+        type: "hello",
+        protocol: 1,
+        extension_version: "smoke",
+        tab: { url: currentUrl, title: "JobFlow smoke tab" },
+      }));
+      resolve();
+    }, { once: true });
+    socket.addEventListener("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("Extension simulator could not connect"));
+    }, { once: true });
+  });
+
+  socket.addEventListener("message", (event) => {
+    void (async () => {
+      const message = JSON.parse(event.data);
+      if (message.type !== "command") return;
+      try {
+        let payload = {};
+        if (message.command === "navigate") {
+          currentUrl = message.payload.url;
+          payload = { url: currentUrl };
+        } else if (message.command === "snapshot") {
+          payload = {
+            snapshots: [{
+              url: currentUrl,
+              title: "JobFlow smoke tab",
+              html: await (await fetch(currentUrl)).text(),
+              captcha_detected: false,
+            }],
+          };
+        } else if (message.command === "fill_plan") {
+          payload = { result: simulatedFillResult(message.payload.plan) };
+        } else if (message.command === "disconnect") {
+          payload = { disconnected: true };
+        } else {
+          throw new Error(`Unsupported smoke command: ${message.command}`);
+        }
+        socket.send(JSON.stringify({
+          type: "result",
+          request_id: message.request_id,
+          ok: true,
+          payload,
+        }));
+      } catch (error) {
+        socket.send(JSON.stringify({
+          type: "result",
+          request_id: message.request_id,
+          ok: false,
+          error: error instanceof Error ? error.message : "Smoke extension failed",
+        }));
+      }
+    })();
+  });
+  return socket;
+}
+
+function simulatedFillResult(plan) {
+  const result = {
+    status: "applied",
+    filled_count: 0,
+    skipped_count: 0,
+    review_count: 0,
+    error_count: 0,
+    items: [],
+  };
+  for (const item of plan.items ?? []) {
+    const eligible =
+      item.action !== "skip" &&
+      !item.needs_review &&
+      Number(item.confidence) >= 0.85 &&
+      (item.source_refs ?? []).length > 0;
+    result.items.push({
+      field_id: item.field_id,
+      status: eligible ? "filled" : item.needs_review ? "needs_review" : "skipped",
+      reason: eligible
+        ? "Filled by extension protocol simulator."
+        : "Not eligible for extension write.",
+    });
+    if (eligible) result.filled_count += 1;
+    else if (item.needs_review) result.review_count += 1;
+    else result.skipped_count += 1;
+  }
+  for (const blocked of plan.blocked_items ?? []) {
+    result.items.push({ ...blocked, status: "blocked" });
+    result.review_count += 1;
+  }
+  return result;
 }
 
 async function waitForHealth() {

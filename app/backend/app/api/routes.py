@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -11,9 +12,10 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.db.database import Database
+from app.core.config import settings
 from app.models.schemas import (
     AnswerBankEntry,
     AnswerBankSaveRequest,
@@ -24,12 +26,15 @@ from app.models.schemas import (
     BrowserState,
     BrowserOpenRequest,
     ChatAdjustResult,
+    CredentialStatus,
+    CredentialWriteRequest,
     DataExport,
     DocumentDeleteResult,
     DocumentRecord,
     ChatAdjustRequest,
     DocumentImportRequest,
     EventHistoryClearResult,
+    ExtensionStatus,
     FillResult,
     FillPlan,
     FillPlanRequest,
@@ -48,17 +53,28 @@ from app.models.schemas import (
 )
 from app.services.browser_controller import BrowserController
 from app.services.ai_orchestrator import OpenAnswerOrchestrator
+from app.services.automated_fill_plan import AutomatedFillPlanService
 from app.services.chat_adjustment import ChatAdjustmentService
+from app.services.credential_store import CredentialStore, CredentialStoreError
 from app.services.document_vault import DocumentVaultService
 from app.services.event_bus import EventBus
+from app.services.extension_bridge import (
+    ExtensionBridge,
+    ExtensionDisconnectedError,
+    ExtensionPairingError,
+)
 from app.services.fill_plan import FillPlanService
 from app.services.fill_plan_review import FillPlanReviewService
 from app.services.form_extraction import FormExtractionService
 from app.services.demo_pages import (
     DEMO_APPLICATION_HTML,
+    DEMO_ASHBY_APPLICATION_HTML,
+    DEMO_ATS_SUBMITTED_HTML,
     DEMO_GREENHOUSE_APPLICATION_HTML,
     DEMO_LEVER_APPLICATION_HTML,
+    DEMO_ORACLE_APPLICATION_HTML,
     DEMO_SUBMITTED_HTML,
+    DEMO_WORKDAY_APPLICATION_HTML,
 )
 from app.services.prompt_context import PromptContextService
 from app.services.success_detection import SuccessDetectionService
@@ -82,6 +98,14 @@ def get_event_bus(request: Request) -> EventBus:
     return request.app.state.event_bus
 
 
+def get_credential_store(request: Request) -> CredentialStore:
+    return request.app.state.credential_store
+
+
+def get_extension_bridge(request: Request) -> ExtensionBridge:
+    return request.app.state.extension_bridge
+
+
 def publish_event(
     event_bus: EventBus,
     db: Database | None,
@@ -100,6 +124,30 @@ def publish_event(
         db.log_event(event_type, event.model_dump(mode="json"))
 
 
+def extension_safe_plan(plan: FillPlan, bridge: ExtensionBridge) -> FillPlan:
+    safe_plan = plan.model_copy(deep=True)
+    for item in safe_plan.items:
+        if item.action != "upload":
+            continue
+        document_id = next(
+            (
+                source_ref.removeprefix("profile.documents.")
+                for source_ref in item.source_refs
+                if source_ref.startswith("profile.documents.")
+            ),
+            "",
+        )
+        if not document_id:
+            item.needs_review = True
+            item.reason = "Upload is missing its local document reference."
+            continue
+        item.value = (
+            f"{settings.extension_api_origin}/extension/documents/"
+            f"{quote(document_id, safe='')}?token={quote(bridge.pairing_token, safe='')}"
+        )
+    return safe_plan
+
+
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -115,9 +163,32 @@ def demo_greenhouse_application_page() -> HTMLResponse:
     return HTMLResponse(DEMO_GREENHOUSE_APPLICATION_HTML)
 
 
+@router.get("/demo/ashby/application", response_class=HTMLResponse)
+def demo_ashby_application_page() -> HTMLResponse:
+    return HTMLResponse(DEMO_ASHBY_APPLICATION_HTML)
+
+
+@router.get("/demo/oracle/application", response_class=HTMLResponse)
+def demo_oracle_application_page() -> HTMLResponse:
+    return HTMLResponse(DEMO_ORACLE_APPLICATION_HTML)
+
+
+@router.get("/demo/workday/application", response_class=HTMLResponse)
+def demo_workday_application_page() -> HTMLResponse:
+    return HTMLResponse(DEMO_WORKDAY_APPLICATION_HTML)
+
+
 @router.get("/demo/lever/application", response_class=HTMLResponse)
 def demo_lever_application_page() -> HTMLResponse:
     return HTMLResponse(DEMO_LEVER_APPLICATION_HTML)
+
+
+@router.get("/demo/{ats}/submitted", response_class=HTMLResponse)
+def demo_ats_submitted_page(ats: str) -> HTMLResponse:
+    html = DEMO_ATS_SUBMITTED_HTML.get(ats)
+    if html is None:
+        raise HTTPException(status_code=404, detail="Unknown ATS demo.")
+    return HTMLResponse(html)
 
 
 @router.get("/demo/submitted", response_class=HTMLResponse)
@@ -152,6 +223,81 @@ async def events_socket(websocket: WebSocket) -> None:
             await websocket.send_json(event.model_dump(mode="json"))
     except WebSocketDisconnect:
         return
+
+
+@router.websocket("/extension/ws")
+async def extension_socket(websocket: WebSocket, token: str = Query(default="")) -> None:
+    bridge: ExtensionBridge = websocket.app.state.extension_bridge
+    try:
+        bridge.authorize(token)
+    except ExtensionPairingError:
+        await websocket.close(code=1008, reason="Invalid pairing token")
+        return
+    await websocket.accept()
+    bridge.attach(websocket)
+    event_bus: EventBus = websocket.app.state.event_bus
+    db: Database = websocket.app.state.database
+    publish_event(
+        event_bus,
+        db,
+        "extension.connected",
+        "Chrome extension connected to JobFlow.",
+        "success",
+    )
+    try:
+        while True:
+            await bridge.handle_message(await websocket.receive_json())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        bridge.detach(websocket)
+        publish_event(
+            event_bus,
+            db,
+            "extension.disconnected",
+            "Chrome extension disconnected.",
+            "info",
+        )
+
+
+@router.get("/extension/status", response_model=ExtensionStatus)
+def extension_status(
+    include_pairing_token: bool = Query(default=False),
+    bridge: ExtensionBridge = Depends(get_extension_bridge),
+) -> ExtensionStatus:
+    return ExtensionStatus.model_validate(bridge.status(include_pairing_token))
+
+
+@router.get("/extension/documents/{document_id}")
+def extension_document(
+    document_id: str,
+    token: str = Query(default=""),
+    db: Database = Depends(get_database),
+    vault: DocumentVaultService = Depends(get_vault),
+    bridge: ExtensionBridge = Depends(get_extension_bridge),
+) -> FileResponse:
+    try:
+        bridge.authorize(token)
+    except ExtensionPairingError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    document = next(
+        (item for item in db.get_profile().documents if item.id == document_id), None
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        path = vault.readable_document_path(document)
+    except (FileNotFoundError, PermissionError) as exc:
+        raise HTTPException(status_code=404, detail="Document file not found") from exc
+    return FileResponse(
+        path,
+        filename=path.name,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/profile", response_model=UserProfile)
@@ -205,6 +351,55 @@ def put_preferences(
     preferences: Preferences, db: Database = Depends(get_database)
 ) -> Preferences:
     return db.put_preferences(preferences)
+
+
+@router.get("/credentials/{provider}", response_model=CredentialStatus)
+def get_credential_status(
+    provider: Literal["deepseek", "openai", "gemini", "custom"],
+    credentials: CredentialStore = Depends(get_credential_store),
+) -> CredentialStatus:
+    try:
+        configured = bool(credentials.get(provider))
+    except CredentialStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CredentialStatus(
+        provider=provider,
+        configured=configured,
+        storage=credentials.storage_name,
+    )
+
+
+@router.put("/credentials/{provider}", response_model=CredentialStatus)
+def put_credential(
+    provider: Literal["deepseek", "openai", "gemini", "custom"],
+    request: CredentialWriteRequest,
+    credentials: CredentialStore = Depends(get_credential_store),
+) -> CredentialStatus:
+    try:
+        credentials.set(provider, request.api_key)
+    except CredentialStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CredentialStatus(
+        provider=provider,
+        configured=True,
+        storage=credentials.storage_name,
+    )
+
+
+@router.delete("/credentials/{provider}", response_model=CredentialStatus)
+def delete_credential(
+    provider: Literal["deepseek", "openai", "gemini", "custom"],
+    credentials: CredentialStore = Depends(get_credential_store),
+) -> CredentialStatus:
+    try:
+        credentials.delete(provider)
+    except CredentialStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CredentialStatus(
+        provider=provider,
+        configured=False,
+        storage=credentials.storage_name,
+    )
 
 
 def save_document_to_profile(
@@ -327,6 +522,8 @@ def import_document(
         document = vault.import_document(request)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Document path not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return save_document_to_profile(
         document=document,
         db=db,
@@ -534,13 +731,44 @@ def create_fill_plan(
     return plan
 
 
+@router.post("/automation/prepare-fill-plan", response_model=FillPlan)
+def prepare_fill_plan(
+    request: FillPlanRequest,
+    db: Database = Depends(get_database),
+    event_bus: EventBus = Depends(get_event_bus),
+    credentials: CredentialStore = Depends(get_credential_store),
+) -> FillPlan:
+    plan = AutomatedFillPlanService(
+        orchestrator=OpenAnswerOrchestrator(credential_store=credentials)
+    ).prepare(
+        form=request.form,
+        profile=db.get_profile(),
+        preferences=db.get_preferences(),
+        allow_ai_custom_fields=request.allow_ai_custom_fields,
+    )
+    publish_event(
+        event_bus,
+        db,
+        "automation.plan_prepared",
+        f"{len(plan.items)} fields ready, {len(plan.blocked_items)} missing Profile values.",
+        "success",
+        {
+            "planned_count": len(plan.items),
+            "blocked_count": len(plan.blocked_items),
+            "ai_custom_fields": request.allow_ai_custom_fields,
+        },
+    )
+    return plan
+
+
 @router.post("/automation/draft-open-answer", response_model=OpenAnswerDraft)
 def draft_open_answer(
     request: OpenAnswerDraftRequest,
     db: Database = Depends(get_database),
     event_bus: EventBus = Depends(get_event_bus),
+    credentials: CredentialStore = Depends(get_credential_store),
 ) -> OpenAnswerDraft:
-    draft = OpenAnswerOrchestrator().draft(
+    draft = OpenAnswerOrchestrator(credential_store=credentials).draft(
         request=request,
         profile=db.get_profile(),
         preferences=db.get_preferences(),
@@ -578,10 +806,11 @@ async def apply_fill_plan(
     browser: BrowserController = Depends(get_browser),
     db: Database = Depends(get_database),
     event_bus: EventBus = Depends(get_event_bus),
+    bridge: ExtensionBridge = Depends(get_extension_bridge),
 ) -> FillResult:
     try:
         result = await browser.apply_fill_plan(
-            request.plan,
+            extension_safe_plan(request.plan, bridge) if not request.dry_run else request.plan,
             form=request.form,
             dry_run=request.dry_run,
         )

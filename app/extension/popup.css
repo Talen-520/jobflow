@@ -1,0 +1,24 @@
+:root {
+  color: #171717;
+  background: #fff;
+  font-family: Geist, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; width: 340px; }
+main { display: grid; gap: 14px; padding: 18px; }
+header { display: flex; align-items: center; gap: 11px; }
+.mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 7px; background: #171717; color: white; font-weight: 700; }
+h1 { margin: 0; font-size: 18px; line-height: 1.35; }
+p { margin: 0; color: #737373; font-size: 12px; line-height: 1.45; }
+.detail { min-height: 34px; }
+.controls { display: grid; gap: 10px; border-top: 1px solid #ececec; padding-top: 12px; }
+.option { display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
+.option strong { display: block; font-size: 13px; font-weight: 600; }
+.option small { display: block; margin-top: 2px; color: #737373; font-size: 11px; line-height: 1.35; }
+.option input { width: 16px; height: 16px; accent-color: #171717; }
+#start-fill { min-height: 40px; border: 1px solid #171717; border-radius: 7px; background: #171717; color: #fff; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+#start-fill:hover { background: #303030; }
+#start-fill:disabled { border-color: #d4d4d4; background: #ededed; color: #8a8a8a; cursor: default; }
+.fill-status { min-height: 17px; }
+.boundary { border-top: 1px solid #ececec; padding-top: 12px; }

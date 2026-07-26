@@ -12,6 +12,10 @@
     "desktop:dev": "npm --workspace app/desktop run dev",
     "desktop:build": "npm --workspace app/desktop run build",
     "desktop:tauri": "npm --workspace app/desktop run tauri",
-    "backend:test": "cd app/backend && uv run pytest"
+    "backend:test": "cd app/backend && uv run pytest",
+    "extension:test": "node --test app/extension/tests/*.test.cjs",
+    "extension:check": "node --check app/extension/background.js && node --check app/extension/content.js && node --check app/extension/jobflow-dom.js && node --check app/extension/popup.js",
+    "backend:sidecar": "node scripts/build-sidecar.mjs",
+    "backend:sidecar:smoke": "node scripts/smoke-sidecar.mjs"
   }
 }

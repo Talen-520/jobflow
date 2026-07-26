@@ -22,6 +22,16 @@ SUCCESS_PHRASES = [
 
 
 class SuccessDetectionService:
+    def __init__(
+        self,
+        extra_phrases: tuple[str, ...] = (),
+        url_tokens: tuple[str, ...] = (),
+        signal_prefix: str = "",
+    ) -> None:
+        self.extra_phrases = extra_phrases
+        self.url_tokens = url_tokens
+        self.signal_prefix = signal_prefix
+
     def detect(self, request: SuccessDetectionRequest) -> SuccessDetectionResult:
         text = self._visible_text(request.html)
         signals: list[str] = []
@@ -30,6 +40,12 @@ class SuccessDetectionService:
                 signals.append(f"text:{phrase}")
         if any(token in request.url.lower() for token in ["confirmation", "success", "submitted"]):
             signals.append("url:success-token")
+
+        for phrase in self.extra_phrases:
+            if phrase.lower() in text:
+                signals.append(f"{self.signal_prefix}:text:{phrase.lower()}")
+        if any(token.lower() in request.url.lower() for token in self.url_tokens):
+            signals.append(f"{self.signal_prefix}:url:success-token")
 
         confidence = min(1.0, 0.35 * len(signals))
         detected = confidence >= 0.35

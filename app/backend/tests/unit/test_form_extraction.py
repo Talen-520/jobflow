@@ -47,3 +47,22 @@ def test_extracts_radio_controls_as_group_field() -> None:
     assert radio.options == ["Yes", "No"]
     assert radio.selector == '[name="authorized"]'
     assert radio.sensitive is True
+
+
+def test_demographic_option_labels_are_sensitive_without_flagging_company() -> None:
+    form = FormExtractionService().extract_from_html(
+        """
+        <form>
+          <label for="company">Current company</label><input id="company" />
+          <label for="gender-man">Man</label><input id="gender-man" type="radio" />
+          <label for="race-asian">Asian or Asian American</label>
+          <input id="race-asian" type="checkbox" />
+        </form>
+        """,
+        url="https://jobs.example.com/apply",
+    )
+
+    fields = {field.field_id: field for field in form.fields}
+    assert fields["company"].sensitive is False
+    assert fields["gender-man"].sensitive is True
+    assert fields["race-asian"].sensitive is True

@@ -1,23 +1,29 @@
 <html>
   <body>
-    <main data-automation-id="jobApplicationPage">
-      <h1>Workday Application</h1>
+    <main data-automation-id="applyFlowPage">
+      <h1 data-automation-id="jobTitleHeading">Software Engineer</h1>
+      <ol data-automation-id="progressBar"><li data-automation-id="progressBarActiveStep">current step 1 of 6</li></ol>
       <form>
-        <label for="name">Full Legal Name</label>
-        <input id="name" name="name" required />
+        <label for="input-3">Full Legal Name</label>
+        <input id="input-3" data-automation-id="name" required />
 
-        <label for="email">Email Address</label>
-        <input id="email" name="email" type="email" required />
+        <label for="input-4">Email Address</label>
+        <input id="input-4" data-automation-id="email" type="email" aria-required="true" />
 
-        <label for="phone">Phone Number</label>
-        <input id="phone" name="phone" type="tel" />
+        <label for="input-5">Phone Number</label>
+        <input id="input-5" data-automation-id="phone" type="tel" />
 
-        <label for="sponsorship">Will you require sponsorship?</label>
-        <select id="sponsorship" name="sponsorship">
+        <label for="input-6">Will you require sponsorship?</label>
+        <select id="input-6" data-automation-id="sponsorship">
           <option value="">Select one</option>
           <option>No</option>
           <option>Yes</option>
         </select>
+
+        <label for="input-7">Password</label>
+        <input id="input-7" data-automation-id="password" type="password" required />
+
+        <input id="robot-field" data-automation-id="beecatcher" name="website" />
       </form>
     </main>
   </body>

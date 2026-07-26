@@ -15,16 +15,24 @@ def new_id(prefix: str) -> str:
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     service: str = "jobflow-backend"
+    protocol_version: int = 2
 
 
 class Identity(BaseModel):
     first_name: str = ""
+    middle_name: str = ""
     last_name: str = ""
     preferred_name: str = ""
     email: str = ""
     phone: str = ""
+    phone_country_code: str = ""
+    phone_extension: str = ""
     location: str = ""
     address: str = ""
+    address_line2: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
 
 
 class Links(BaseModel):
@@ -34,10 +42,15 @@ class Links(BaseModel):
 
 
 class WorkAuthorization(BaseModel):
-    country: str = ""
+    country: str = "US"
     authorized: bool | None = None
     requires_sponsorship: bool | None = None
     notes: str = ""
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def default_country_to_us(cls, value: Any) -> str:
+        return str(value or "US").strip() or "US"
 
 
 class Fact(BaseModel):
@@ -109,11 +122,10 @@ class UserProfile(BaseModel):
 
 class Preferences(BaseModel):
     final_submission_mode: Literal["manual_only"] = "manual_only"
-    fill_sensitive_fields: bool = False
-    fill_eeo_fields: bool = False
+    fill_sensitive_fields: bool = True
+    fill_eeo_fields: bool = True
     ai_provider: Literal["ollama", "deepseek", "openai", "gemini", "custom"] = "ollama"
     ai_model: str = "llama3.1:8b"
-    ai_api_key: str = ""
     ai_base_url: str = ""
     open_answer_style: str = "concise_professional"
     open_answer_max_words: int = 180
@@ -121,6 +133,24 @@ class Preferences(BaseModel):
     relocation_policy: Literal["ask_user", "leave_blank", "use_profile"] = "ask_user"
     missing_fact_policy: Literal["ask_user", "leave_blank"] = "ask_user"
     low_confidence_policy: Literal["pause", "leave_blank"] = "pause"
+
+
+class CredentialWriteRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=8192)
+
+    @field_validator("api_key")
+    @classmethod
+    def api_key_required(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("API key is required")
+        return stripped
+
+
+class CredentialStatus(BaseModel):
+    provider: Literal["deepseek", "openai", "gemini", "custom"]
+    configured: bool = False
+    storage: str = "local_env_file"
 
 
 class FieldType(str, Enum):
@@ -205,9 +235,24 @@ class ApplyFillPlanRequest(BaseModel):
 
 
 class BrowserState(BaseModel):
-    status: Literal["started", "stopped", "not_started", "opened", "error"]
+    status: Literal[
+        "started", "stopped", "not_started", "opened", "connected", "error"
+    ]
     url: str = ""
     message: str = ""
+
+
+class ExtensionStatus(BaseModel):
+    connected: bool = False
+    url: str = ""
+    title: str = ""
+    extension_version: str = ""
+    captcha_detected: bool = False
+    form_detected: bool = False
+    field_count: int = 0
+    ats: str = ""
+    form_url: str = ""
+    pairing_token: str = ""
 
 
 class AutomationEvent(BaseModel):
@@ -269,6 +314,7 @@ class OpenAnswerDraftRequest(BaseModel):
     question: str
     question_type: str = "general"
     keywords: list[str] = Field(default_factory=list)
+    context_facts: dict[str, str] = Field(default_factory=dict)
     max_words: int | None = None
     use_model: bool = False
 
@@ -308,6 +354,7 @@ class InspectRequest(BaseModel):
 
 class FillPlanRequest(BaseModel):
     form: FormSchema
+    allow_ai_custom_fields: bool = True
 
 
 class FillPlanReviewRequest(BaseModel):
@@ -360,6 +407,7 @@ class DocumentImportRequest(BaseModel):
 
 
 class DataExport(BaseModel):
+    schema_version: Literal[1] = 1
     profile: UserProfile
     preferences: Preferences
     applications: list[ApplicationRecord] = Field(default_factory=list)

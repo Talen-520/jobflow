@@ -71,21 +71,11 @@ class FormExtractionService:
         fields: list[FormField] = []
         radio_fields: dict[str, FormField] = {}
         for index, control in enumerate(parser.controls):
-            input_type = control.get("type", control["tag"]).lower()
-            if input_type in {"hidden", "submit", "button", "reset"}:
+            if not self._include_control(control):
                 continue
-            field_type = self._field_type(control["tag"], input_type)
-            html_id = control.get("id", "")
-            name = control.get("name", "")
-            label = (
-                parser.labels.get(html_id)
-                or control.get("nested_label", "")
-                or control.get("aria-label", "")
-                or control.get("placeholder", "")
-                or name
-                or html_id
-            )
-            field_id = name or html_id or f"field_{index}"
+            field_type = self._field_type(control)
+            label = self._control_label(parser, control)
+            field_id = self._field_id(control, index)
             if field_type == FieldType.radio:
                 radio_field = radio_fields.get(field_id)
                 option = self._radio_option(control, label)
@@ -94,7 +84,7 @@ class FormExtractionService:
                         field_id=field_id,
                         label=self._radio_group_label(field_id, label),
                         type=FieldType.radio,
-                        required="required" in control,
+                        required=self._is_required(control),
                         options=[],
                         placeholder=control.get("placeholder", ""),
                         helper_text=control.get("title", ""),
@@ -103,7 +93,7 @@ class FormExtractionService:
                     )
                     radio_fields[field_id] = radio_field
                     fields.append(radio_field)
-                radio_field.required = radio_field.required or "required" in control
+                radio_field.required = radio_field.required or self._is_required(control)
                 radio_field.sensitive = radio_field.sensitive or self._looks_sensitive(
                     f"{label} {field_id}"
                 )
@@ -115,8 +105,8 @@ class FormExtractionService:
                     field_id=field_id,
                     label=label,
                     type=field_type,
-                    required="required" in control,
-                    options=control.get("options", []),
+                    required=self._is_required(control),
+                    options=self._control_options(control),
                     placeholder=control.get("placeholder", ""),
                     helper_text=control.get("title", ""),
                     selector=self._selector(control, field_id),
@@ -134,7 +124,15 @@ class FormExtractionService:
             fields=fields,
         )
 
-    def _field_type(self, tag: str, input_type: str) -> FieldType:
+    def _include_control(self, control: dict[str, Any]) -> bool:
+        input_type = control.get("type", control["tag"]).lower()
+        return input_type not in {"hidden", "submit", "button", "reset"}
+
+    def _field_type(self, control: dict[str, Any]) -> FieldType:
+        tag = control["tag"]
+        input_type = control.get("type", tag).lower()
+        if control.get("role", "").lower() == "combobox":
+            return FieldType.select
         if tag == "textarea":
             return FieldType.textarea
         if tag == "select":
@@ -148,6 +146,34 @@ class FormExtractionService:
             "text": FieldType.text,
         }
         return mapping.get(input_type, FieldType.unknown)
+
+    def _field_id(self, control: dict[str, Any], index: int) -> str:
+        return control.get("name") or control.get("id") or f"field_{index}"
+
+    def _control_label(
+        self, parser: _HTMLFormParser, control: dict[str, Any]
+    ) -> str:
+        html_id = control.get("id", "")
+        return (
+            parser.labels.get(html_id)
+            or control.get("nested_label", "")
+            or control.get("aria-label", "")
+            or control.get("placeholder", "")
+            or control.get("name", "")
+            or html_id
+        )
+
+    def _is_required(self, control: dict[str, Any]) -> bool:
+        return "required" in control or control.get("aria-required", "").lower() == "true"
+
+    def _control_options(self, control: dict[str, Any]) -> list[str]:
+        options = list(control.get("options", []))
+        data_options = control.get("data-options", "")
+        for option in data_options.split("|"):
+            value = self._clean_text(option)
+            if value and value not in options:
+                options.append(value)
+        return options
 
     def _selector(self, control: dict[str, Any], fallback: str) -> str:
         if control.get("id"):
@@ -233,11 +259,26 @@ class FormExtractionService:
     def _looks_sensitive(self, label: str) -> bool:
         normalized = label.lower()
         return any(
-            term in normalized
+            re.search(rf"\b{re.escape(term)}\b", normalized)
             for term in [
                 "gender",
+                "man",
+                "woman",
+                "non-binary",
+                "transgender",
                 "race",
                 "ethnicity",
+                "asian",
+                "american indian",
+                "alaska native",
+                "african american",
+                "native hawaiian",
+                "pacific islander",
+                "hispanic",
+                "latino",
+                "sexual orientation",
+                "under 30",
+                "over 30",
                 "veteran",
                 "disability",
                 "sponsorship",

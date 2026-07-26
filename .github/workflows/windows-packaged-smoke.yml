@@ -1,0 +1,25 @@
+name: Windows Packaged Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: uv sync --extra test --extra build
+        working-directory: app/backend
+      - run: npm run backend:sidecar
+      - run: npm run backend:sidecar:smoke
+      - run: cargo build --release --locked
+        working-directory: app/desktop/src-tauri

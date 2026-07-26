@@ -79,7 +79,13 @@ class Database:
             preferences = Preferences()
             self.put_preferences(preferences)
             return preferences
-        return Preferences.model_validate_json(row["payload"])
+        raw_preferences = json.loads(row["payload"])
+        had_legacy_api_key = "ai_api_key" in raw_preferences
+        raw_preferences.pop("ai_api_key", None)
+        preferences = Preferences.model_validate(raw_preferences)
+        if had_legacy_api_key:
+            self.put_preferences(preferences)
+        return preferences
 
     def put_preferences(self, preferences: Preferences) -> Preferences:
         self._put_state("preferences_state", preferences.model_dump(mode="json"))

@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "JobFlow Local Assistant",
+  "version": "0.5.5",
+  "description": "Detect supported job application forms and connect them to the local JobFlow desktop app.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://*.greenhouse.io/*",
+    "https://*.ashbyhq.com/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.workdayjobs.com/*",
+    "https://*.oraclecloud.com/*",
+    "https://*.taleo.net/*",
+    "https://jobs.lever.co/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.greenhouse.io/*",
+        "https://*.ashbyhq.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://*.workdayjobs.com/*",
+        "https://*.oraclecloud.com/*",
+        "https://*.taleo.net/*",
+        "https://jobs.lever.co/*"
+      ],
+      "js": ["jobflow-dom.js", "content.js"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "JobFlow",
+    "default_popup": "popup.html"
+  }
+}

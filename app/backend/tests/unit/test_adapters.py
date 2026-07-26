@@ -7,12 +7,16 @@ from app.services.fill_plan import FillPlanService
 
 
 class FakePage:
-    def __init__(self, url: str, html: str) -> None:
+    def __init__(self, url: str, html: str, frames: list["FakePage"] | None = None) -> None:
         self.url = url
         self._html = html
+        self.frames = frames or []
 
     async def content(self) -> str:
         return self._html
+
+    async def goto(self, url: str, wait_until: str = "domcontentloaded") -> None:
+        self.url = url
 
 
 def test_registry_selects_greenhouse_and_extracts_form() -> None:
@@ -82,7 +86,7 @@ def test_registry_selects_ashby_workday_and_oracle() -> None:
                 "ashby",
                 "https://jobs.ashbyhq.com/example/123/application",
                 "tests/fixtures/ashby_application.html",
-                {"firstName", "lastName", "email", "resume"},
+                {"name", "email", "resume", "work-location", "sponsorship"},
             ),
             (
                 "workday",
@@ -94,7 +98,7 @@ def test_registry_selects_ashby_workday_and_oracle() -> None:
                 "oracle",
                 "https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience",
                 "tests/fixtures/oracle_application.html",
-                {"name", "email", "linkedin", "resume"},
+                {"email", "linkedin", "resume", "legal-disclaimer-checkbox"},
             ),
         ]
         for ats, url, fixture, expected_ids in cases:
@@ -106,6 +110,29 @@ def test_registry_selects_ashby_workday_and_oracle() -> None:
             assert adapter.name == ats
             assert form.ats == ats
             assert {field.field_id for field in form.fields} >= expected_ids
+
+    asyncio.run(run())
+
+
+def test_registry_prefers_ashby_outer_page_and_extracts_embedded_frame() -> None:
+    async def run() -> None:
+        frame = FakePage(
+            "https://jobs.ashbyhq.com/Ashby/448baa?embed=js",
+            Path("tests/fixtures/ashby_application.html").read_text(),
+        )
+        page = FakePage(
+            "https://www.ashbyhq.com/careers?ashby_jid=448baa",
+            "<main>Careers integrations include Greenhouse and Ashby.</main>",
+            frames=[frame],
+        )
+
+        adapter = await AdapterRegistry().select_for_page(page)
+        form = await adapter.extract_form(page)
+
+        assert adapter.name == "ashby"
+        assert form.ats == "ashby"
+        assert "/application" in frame.url
+        assert {field.field_id for field in form.fields} >= {"name", "email", "resume"}
 
     asyncio.run(run())
 

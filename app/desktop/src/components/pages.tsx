@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Database,
   FileText,
+  Plug,
   ShieldCheck,
 } from "lucide-react";
 
@@ -21,6 +22,7 @@ import {
   type ApplicationRecord,
   type DataExport,
   defaultPreferences,
+  deleteCredential,
   deleteDocument,
   emptyProfile,
   exportData,
@@ -28,13 +30,19 @@ import {
   type FillResult,
   type FormSchema,
   getPreferences,
+  getCredentialStatus,
+  getExtensionStatus,
   getProfile,
   importData,
   type Preferences,
   type Profile,
+  putCredential,
   putPreferences,
   putProfile,
   uploadDocument,
+  type CredentialStatus,
+  type ExtensionStatus,
+  type RemoteAIProvider,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -82,7 +90,7 @@ const API_MODEL_OPTIONS: Partial<Record<Preferences["ai_provider"], ModelOption[
   ],
   gemini: [
     { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-    { value: "gemini-3.1-pro", label: "Gemini 3.1 Pro" },
+    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
     { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
     { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
     { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
@@ -173,14 +181,6 @@ export function ProfilePage({
     }));
   };
 
-  const updateFullName = (value: string) => {
-    const names = splitFullName(value);
-    setProfile((current) => ({
-      ...current,
-      identity: { ...current.identity, ...names },
-    }));
-  };
-
   const updateLink = (key: keyof Profile["links"], value: string) => {
     setProfile((current) => ({
       ...current,
@@ -194,11 +194,18 @@ export function ProfilePage({
   ) => {
     setProfile((current) => ({
       ...current,
-      work_authorization: { ...current.work_authorization, [key]: value },
+      work_authorization: {
+        ...current.work_authorization,
+        country:
+          key === "authorized" || key === "requires_sponsorship"
+            ? "US"
+            : current.work_authorization.country,
+        [key]: value,
+      },
     }));
   };
 
-  const updatePreference = (key: string, value: string) => {
+  const updatePreference = (key: string, value: string | boolean | null) => {
     setProfile((current) => ({
       ...current,
       preferences: { ...current.preferences, [key]: value },
@@ -266,12 +273,28 @@ export function ProfilePage({
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-x-4 gap-y-5 max-[760px]:grid-cols-1">
             <ProfileInput
-              label="Full name"
-              value={fullNameFromProfile(profile)}
-              onChange={updateFullName}
+              label="First name"
+              value={profile.identity.first_name}
+              onChange={(value) => updateIdentity("first_name", value)}
+            />
+            <ProfileInput
+              label="Last name"
+              value={profile.identity.last_name}
+              onChange={(value) => updateIdentity("last_name", value)}
+            />
+            <ProfileInput
+              label="Middle name"
+              value={profile.identity.middle_name}
+              onChange={(value) => updateIdentity("middle_name", value)}
+            />
+            <ProfileInput
+              label="Preferred name"
+              value={profile.identity.preferred_name}
+              onChange={(value) => updateIdentity("preferred_name", value)}
             />
             <ProfileInput
               label="Email"
+              type="email"
               value={profile.identity.email}
               onChange={(value) => updateIdentity("email", value)}
             />
@@ -281,9 +304,44 @@ export function ProfilePage({
               onChange={(value) => updateIdentity("phone", value)}
             />
             <ProfileInput
-              label="Location"
+              label="Phone country code"
+              value={profile.identity.phone_country_code}
+              onChange={(value) => updateIdentity("phone_country_code", value)}
+            />
+            <ProfileInput
+              label="Phone extension"
+              value={profile.identity.phone_extension}
+              onChange={(value) => updateIdentity("phone_extension", value)}
+            />
+            <ProfileInput
+              label="Address line 1"
+              value={profile.identity.address}
+              onChange={(value) => updateIdentity("address", value)}
+            />
+            <ProfileInput
+              label="Address line 2"
+              value={profile.identity.address_line2}
+              onChange={(value) => updateIdentity("address_line2", value)}
+            />
+            <ProfileInput
+              label="City"
               value={profile.identity.location}
               onChange={(value) => updateIdentity("location", value)}
+            />
+            <ProfileInput
+              label="State / Province"
+              value={profile.identity.state}
+              onChange={(value) => updateIdentity("state", value)}
+            />
+            <ProfileInput
+              label="Postal code"
+              value={profile.identity.postal_code}
+              onChange={(value) => updateIdentity("postal_code", value)}
+            />
+            <ProfileInput
+              label="Country / Territory"
+              value={profile.identity.country}
+              onChange={(value) => updateIdentity("country", value)}
             />
             <ProfileInput
               label="Company"
@@ -307,18 +365,34 @@ export function ProfilePage({
             />
             <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Are you legally authorized to work in the country for which you are applying?"
+                label="Are you legally authorized to work in the US?"
                 value={profile.work_authorization.authorized}
                 onChange={(value) => updateWorkAuthorization("authorized", value)}
               />
             </div>
             <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Will you now or in the future require sponsorship for employment visa status (e.g., H-1B, etc.)?"
+                label="Will you now or in the future require visa sponsorship to work in the US?"
                 value={profile.work_authorization.requires_sponsorship}
                 onChange={(value) =>
                   updateWorkAuthorization("requires_sponsorship", value)
                 }
+              />
+            </div>
+            <div className="col-span-2 max-[760px]:col-span-1">
+              <NullableBooleanSelect
+                label="Are you subject to a non-compete or non-solicitation agreement that could affect employment?"
+                value={profilePreferenceBoolean(profile, "non_compete_restrictions")}
+                onChange={(value) =>
+                  updatePreference("non_compete_restrictions", value)
+                }
+              />
+            </div>
+            <div className="col-span-2 max-[760px]:col-span-1">
+              <NullableBooleanSelect
+                label="May employers send job-application updates by SMS?"
+                value={profilePreferenceBoolean(profile, "sms_opt_in")}
+                onChange={(value) => updatePreference("sms_opt_in", value)}
               />
             </div>
             <ProfileInput
@@ -330,6 +404,49 @@ export function ProfilePage({
               label="Please tell us how you heard about this opportunity."
               value={profilePreference(profile, "heard_about_opportunity")}
               onChange={(value) => updatePreference("heard_about_opportunity", value)}
+            />
+            <ProfileSelect
+              label="Gender"
+              value={profilePreference(profile, "gender")}
+              options={[
+                { value: "", label: "Prefer not set" },
+                { value: "Male", label: "Male" },
+                { value: "Female", label: "Female" },
+                { value: "Non-binary", label: "Non-binary" },
+                {
+                  value: "I do not wish to answer",
+                  label: "I do not wish to answer",
+                },
+              ]}
+              onChange={(value) => updatePreference("gender", value)}
+            />
+            <ProfileSelect
+              label="Race"
+              value={profilePreference(profile, "race")}
+              options={[
+                { value: "", label: "Prefer not set" },
+                {
+                  value: "American Indian or Alaska Native",
+                  label: "American Indian or Alaska Native",
+                },
+                { value: "Asian", label: "Asian" },
+                {
+                  value: "Black or African American",
+                  label: "Black or African American",
+                },
+                { value: "Hispanic or Latino", label: "Hispanic or Latino" },
+                {
+                  value: "Native Hawaiian or Other Pacific Islander",
+                  label: "Native Hawaiian or Other Pacific Islander",
+                },
+                { value: "White", label: "White" },
+                { value: "Two or More Races", label: "Two or More Races" },
+                {
+                  value: "I do not wish to answer",
+                  label: "I do not wish to answer",
+                },
+              ]}
+              onChange={(value) => updatePreference("race", value)}
             />
             <ProfileSelect
               label="Disability status"
@@ -456,23 +573,18 @@ function fullNameFromProfile(profile: Profile): string {
     .join(" ");
 }
 
-function splitFullName(value: string): Pick<Profile["identity"], "first_name" | "last_name"> {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) {
-    return { first_name: "", last_name: "" };
-  }
-  if (parts.length === 1) {
-    return { first_name: parts[0], last_name: "" };
-  }
-  return {
-    first_name: parts.slice(0, -1).join(" "),
-    last_name: parts[parts.length - 1],
-  };
+function isValidEmail(value: string): boolean {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.trim());
 }
 
 function profilePreference(profile: Profile, key: string): string {
   const value = profile.preferences[key];
   return typeof value === "string" ? value : "";
+}
+
+function profilePreferenceBoolean(profile: Profile, key: string): boolean | null {
+  const value = profile.preferences[key];
+  return typeof value === "boolean" ? value : null;
 }
 
 function modelOptionsForProvider(
@@ -498,6 +610,31 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [status, setStatus] = useState("Not loaded");
   const lastSavedPreferencesRef = useRef("");
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [credentialDirty, setCredentialDirty] = useState(false);
+  const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(
+    null,
+  );
+  const [extensionStatus, setExtensionStatus] = useState<ExtensionStatus | null>(null);
+
+  useEffect(() => {
+    if (!backendOnline) {
+      setExtensionStatus(null);
+      return;
+    }
+    const controller = new AbortController();
+    const refresh = () => {
+      getExtensionStatus(false, controller.signal)
+        .then(setExtensionStatus)
+        .catch(() => setExtensionStatus(null));
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 2000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [backendOnline]);
 
   useEffect(() => {
     if (!backendOnline) {
@@ -519,6 +656,22 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
       });
     return () => controller.abort();
   }, [backendOnline]);
+
+  useEffect(() => {
+    setApiKeyDraft("");
+    setCredentialDirty(false);
+    setCredentialStatus(null);
+    if (!backendOnline || preferences.ai_provider === "ollama") {
+      return;
+    }
+
+    const controller = new AbortController();
+    const provider = preferences.ai_provider as RemoteAIProvider;
+    getCredentialStatus(provider, controller.signal)
+      .then(setCredentialStatus)
+      .catch(() => setStatus("Unable to read the local secrets file."));
+    return () => controller.abort();
+  }, [backendOnline, preferences.ai_provider]);
 
   useEffect(() => {
     if (!backendOnline || !preferencesLoaded) {
@@ -544,6 +697,51 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
     return () => window.clearTimeout(timeout);
   }, [backendOnline, preferences, preferencesLoaded]);
 
+  useEffect(() => {
+    const apiKey = apiKeyDraft.trim();
+    if (
+      !backendOnline ||
+      !credentialDirty ||
+      !apiKey ||
+      preferences.ai_provider === "ollama"
+    ) {
+      return;
+    }
+
+    const provider = preferences.ai_provider as RemoteAIProvider;
+    setStatus("Saving API key to the local .env file...");
+    const timeout = window.setTimeout(() => {
+      void putCredential(provider, apiKey)
+        .then((saved) => {
+          setCredentialStatus(saved);
+          setApiKeyDraft("");
+          setCredentialDirty(false);
+          setStatus("API key saved locally in .env.");
+        })
+        .catch(() => setStatus("API key save failed."));
+    }, 900);
+
+    return () => window.clearTimeout(timeout);
+  }, [apiKeyDraft, backendOnline, credentialDirty, preferences.ai_provider]);
+
+  const removeProviderCredential = async () => {
+    if (preferences.ai_provider === "ollama") {
+      return;
+    }
+    setStatus("Removing API key...");
+    try {
+      const removed = await deleteCredential(
+        preferences.ai_provider as RemoteAIProvider,
+      );
+      setCredentialStatus(removed);
+      setApiKeyDraft("");
+      setCredentialDirty(false);
+      setStatus("API key removed from the local .env file.");
+    } catch {
+      setStatus("API key removal failed.");
+    }
+  };
+
   const apiModelOptions = modelOptionsForProvider(
     preferences.ai_provider,
     preferences.ai_model,
@@ -560,6 +758,52 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
     >
       <div className="grid grid-cols-[1fr_320px] gap-4 max-[980px]:grid-cols-1">
         <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle>Chrome Connection</CardTitle>
+                  <CardDescription>
+                    Supported application forms are detected automatically while JobFlow runs.
+                  </CardDescription>
+                </div>
+                <Badge variant={extensionStatus?.connected ? "success" : "outline"}>
+                  {extensionStatus?.connected ? "Connected" : "Disconnected"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {extensionStatus?.connected ? (
+                <div className="flex items-start gap-3 rounded-md border border-border p-3">
+                  <Plug className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 text-sm text-muted-foreground">
+                    <div className="font-medium text-foreground">Browser paired</div>
+                    <div>
+                      {extensionStatus.title
+                        ? extensionStatus.title
+                        : "Open a supported job application in Chrome."}
+                    </div>
+                    {extensionStatus.url ? (
+                      <div className="truncate">{extensionStatus.url}</div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3 rounded-md border border-border p-3">
+                  <Plug className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 text-sm text-muted-foreground">
+                    <div className="font-medium text-foreground">
+                      Waiting for Chrome extension
+                    </div>
+                    <div>
+                      Start JobFlow, then open or reload the extension. It connects
+                      automatically over localhost.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle>Model Connection</CardTitle>
@@ -579,7 +823,6 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
                       ...current,
                       ai_provider: provider,
                       ai_model: DEFAULT_MODEL_BY_PROVIDER[provider],
-                      ai_api_key: provider === "ollama" ? "" : current.ai_api_key,
                       ai_base_url:
                         DEFAULT_BASE_URL_BY_PROVIDER[provider] ?? current.ai_base_url,
                     };
@@ -609,14 +852,32 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
                 />
               )}
               {preferences.ai_provider !== "ollama" ? (
-                <ProfileInput
-                  label="API key"
-                  type="password"
-                  value={preferences.ai_api_key}
-                  onChange={(value) =>
-                    setPreferences((current) => ({ ...current, ai_api_key: value }))
-                  }
-                />
+                <div className="flex flex-col gap-2">
+                  <ProfileInput
+                    label="API key"
+                    placeholder={
+                      credentialStatus?.configured
+                        ? "Saved locally in .env"
+                        : "Enter API key"
+                    }
+                    type="password"
+                    value={apiKeyDraft}
+                    onChange={(value) => {
+                      setApiKeyDraft(value);
+                      setCredentialDirty(true);
+                    }}
+                  />
+                  {credentialStatus?.configured ? (
+                    <Button
+                      className="self-start"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void removeProviderCredential()}
+                    >
+                      Remove API key
+                    </Button>
+                  ) : null}
+                </div>
               ) : null}
               <ProfileInput
                 label="Base URL"
@@ -629,32 +890,13 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Review Boundaries</CardTitle>
-              <CardDescription>Final submission is locked to manual only.</CardDescription>
+              <CardTitle>Open Answers</CardTitle>
+              <CardDescription>
+                Saved Profile fields fill directly. Only open questions use the selected
+                source-backed AI model. Final submission remains manual.
+              </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <SwitchRow
-                checked={preferences.fill_sensitive_fields}
-                description="When off, sponsorship, salary, authorization, and other sensitive fields pause."
-                label="Allow sensitive field auto-fill"
-                onChange={(value) =>
-                  setPreferences((current) => ({
-                    ...current,
-                    fill_sensitive_fields: value,
-                  }))
-                }
-              />
-              <SwitchRow
-                checked={preferences.fill_eeo_fields}
-                description="When off, EEO fields remain blocked unless the user manually fills them."
-                label="Allow EEO field auto-fill"
-                onChange={(value) =>
-                  setPreferences((current) => ({
-                    ...current,
-                    fill_eeo_fields: value,
-                  }))
-                }
-              />
               <div className="grid grid-cols-2 gap-4 max-[760px]:grid-cols-1">
                 <ProfileInput
                   label="Open answer max words"
@@ -804,7 +1046,11 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
             {preferences.ai_provider !== "ollama" ? (
               <InfoLine
                 label="API key"
-                value={preferences.ai_api_key ? "Saved locally" : "Not set"}
+                value={
+                  credentialStatus?.configured
+                    ? "Local .env file"
+                    : "Not set"
+                }
               />
             ) : null}
             <div className="flex items-start gap-2 rounded-[16px] bg-muted p-3 text-foreground">
@@ -932,11 +1178,13 @@ function PageShell({
 
 function ProfileInput({
   label,
+  placeholder,
   type = "text",
   value,
   onChange,
 }: {
   label: string;
+  placeholder?: string;
   type?: string;
   value: string;
   onChange: (value: string) => void;
@@ -946,6 +1194,7 @@ function ProfileInput({
       <span className="leading-none font-medium">{label}</span>
       <Input
         type={type}
+        placeholder={placeholder}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -1120,22 +1369,28 @@ export function DashboardPage({
   profile: Profile | null;
 }) {
   const identityReady = Boolean(
-    profile && fullNameFromProfile(profile) && profile.identity.email,
+    profile?.identity.first_name &&
+      profile.identity.last_name &&
+      isValidEmail(profile.identity.email),
   );
   const resumeReady = Boolean(
     profile?.documents.some((document) => document.kind === "resume"),
   );
   const savedProfileFieldCount = profile
     ? [
-        fullNameFromProfile(profile),
+        profile.identity.first_name,
+        profile.identity.last_name,
         profile.identity.email,
         profile.identity.phone,
         profile.identity.location,
         profilePreference(profile, "company"),
         profile.links.linkedin,
         profile.links.github,
+        profile.links.portfolio,
         profilePreference(profile, "university"),
         profilePreference(profile, "heard_about_opportunity"),
+        profilePreference(profile, "gender"),
+        profilePreference(profile, "race"),
       ].filter(Boolean).length
     : 0;
   const submittedCount = applications.filter(
@@ -1181,7 +1436,7 @@ export function DashboardPage({
           <CardContent className="flex flex-col gap-2 text-sm">
             <InfoLine label="Identity" value={identityReady ? "Ready" : "Incomplete"} />
             <InfoLine label="Resume" value={resumeReady ? "Uploaded" : "Missing"} />
-            <InfoLine label="Saved fields" value={`${savedProfileFieldCount}/9`} />
+            <InfoLine label="Saved fields" value={`${savedProfileFieldCount}/13`} />
             <InfoLine
               label="Work auth"
               value={formatNullableBoolean(profile?.work_authorization.authorized ?? null)}

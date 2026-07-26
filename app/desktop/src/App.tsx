@@ -1,12 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   BriefcaseBusiness,
   CheckCircle2,
   Home,
   Lock,
-  MonitorPlay,
-  MoreVertical,
   Pause,
   Play,
   Search,
@@ -38,11 +36,6 @@ import {
   SettingsPage,
 } from "@/components/pages";
 import {
-  collapseToFloatingAssistant,
-  isDesktopRuntime,
-  showFloatingAssistant,
-} from "@/lib/desktop";
-import {
   applicationSnapshotAnswerCount,
   applicationSnapshotFromRecord,
   buildApplicationAnswersSnapshot,
@@ -57,19 +50,17 @@ import {
   createFillPlan,
   deleteApplication,
   detectSuccess,
-  getDemoApplicationUrl,
   getEventsUrl,
+  getExtensionStatus,
   getHealth,
   getProfile,
   inspectForm,
   listApplications,
   listEventHistory,
-  openBrowser,
   patchApplication,
   reviewFillPlanField,
   saveAnswerBankEntry,
   stopBrowser,
-  testApplicationLinks,
   type ApplicationRecord,
   type AutomationEvent,
   type DocumentRecord,
@@ -175,7 +166,6 @@ function App() {
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">(
     "checking",
   );
-  const [targetUrl, setTargetUrl] = useState(getDemoApplicationUrl);
   const [automationMessage, setAutomationMessage] = useState("Ready to inspect this page.");
   const [formSchema, setFormSchema] = useState<FormSchema | null>(null);
   const [fillPlan, setFillPlan] = useState<FillPlan | null>(null);
@@ -186,7 +176,8 @@ function App() {
   const [profileState, setProfileState] = useState<Profile | null>(null);
   const [profileDocuments, setProfileDocuments] = useState<DocumentRecord[]>([]);
   const [eventLog, setEventLog] = useState<AutomationEvent[]>([]);
-  const desktopAvailable = isDesktopRuntime();
+  const [detectedFormPrompt, setDetectedFormPrompt] = useState<FormSchema | null>(null);
+  const lastDetectedFormRef = useRef("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -254,33 +245,63 @@ function App() {
     return () => socket.close();
   }, [backendStatus]);
 
-  const backendOnline = backendStatus === "online";
-
-  const openJobUrl = async (url: string) => {
-    setTargetUrl(url);
-    if (!backendOnline) {
-      setAutomationMessage("Backend is offline. Start the local API first.");
+  useEffect(() => {
+    if (backendStatus !== "online") {
       return;
     }
+    let cancelled = false;
+    let scanInFlight = false;
 
-    setAssistantState("running");
-    setAutomationMessage(`Opening ${url}`);
-    try {
-      const state = await openBrowser(url);
-      setAutomationMessage(
-        state.status === "error"
-          ? state.message || "Browser failed to start."
-          : `Browser opened: ${state.url}`,
-      );
-    } catch (error) {
-      setAutomationMessage(error instanceof Error ? error.message : "Browser open failed.");
-    } finally {
-      setAssistantState((current) => (current === "paused" ? "paused" : "idle"));
-    }
-  };
+    const scanCurrentPage = async () => {
+      if (scanInFlight) return;
+      scanInFlight = true;
+      try {
+        const status = await getExtensionStatus();
+        const detectionKey = [
+          status.form_url,
+          status.ats,
+          status.field_count,
+        ].join("|");
+        if (
+          !status.connected ||
+          !status.form_detected ||
+          status.field_count <= 0 ||
+          !status.form_url ||
+          detectionKey === lastDetectedFormRef.current
+        ) {
+          return;
+        }
+        const inspected = await inspectForm();
+        if (cancelled || inspected.fields.length === 0) return;
+        lastDetectedFormRef.current = detectionKey;
+        setFormSchema(inspected);
+        setFillPlan(null);
+        setFillResult(null);
+        setSuccessResult(null);
+        setSuccessDraft(null);
+        setDetectedFormPrompt(inspected);
+        setAutomationMessage(
+          `${inspected.fields.length} fields detected on ${inspected.ats}.`,
+        );
+      } catch {
+        // The extension may still be loading a dynamic form; the next poll retries.
+      } finally {
+        scanInFlight = false;
+      }
+    };
+
+    void scanCurrentPage();
+    const interval = window.setInterval(scanCurrentPage, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [backendStatus]);
+
+  const backendOnline = backendStatus === "online";
 
   const runAutomationStep = async (
-    step: "open" | "inspect" | "plan" | "fill" | "success" | "save" | "stop",
+    step: "inspect" | "plan" | "fill" | "success" | "save" | "stop",
   ) => {
     if (!backendOnline) {
       setAutomationMessage("Backend is offline. Start the local API first.");
@@ -288,27 +309,18 @@ function App() {
     }
     setAssistantState("running");
     try {
-      if (step === "open") {
-        setAutomationMessage("Opening controlled browser...");
-        const state = await openBrowser(targetUrl);
-        setAutomationMessage(
-          state.status === "error"
-            ? state.message || "Browser failed to start."
-            : `Browser opened: ${state.url}`,
-        );
-      }
       if (step === "stop") {
-        setAutomationMessage("Stopping controlled browser...");
+        setAutomationMessage("Disconnecting the current Chrome tab...");
         const state = await stopBrowser();
         setFormSchema(null);
         setFillPlan(null);
         setFillResult(null);
         setSuccessResult(null);
         setSuccessDraft(null);
-        setAutomationMessage(state.status === "stopped" ? "Browser stopped." : state.message);
+        setAutomationMessage(state.status === "stopped" ? "Chrome tab disconnected." : state.message);
       }
       if (step === "inspect") {
-        setAutomationMessage("Inspecting current browser page...");
+        setAutomationMessage("Inspecting the connected Chrome tab...");
         const inspected = await inspectForm();
         setFormSchema(inspected);
         setFillPlan(null);
@@ -496,38 +508,13 @@ function App() {
     setProfileDocuments(profile.documents);
   };
 
-  const openFloatingAssistant = async () => {
-    try {
-      const result = await showFloatingAssistant();
-      setAutomationMessage(result);
-    } catch (error) {
-      setAutomationMessage(
-        error instanceof Error ? error.message : "Unable to open floating assistant.",
-      );
-    }
-  };
-
-  const collapseMainWindow = async () => {
-    try {
-      const result = await collapseToFloatingAssistant();
-      setAutomationMessage(result);
-    } catch (error) {
-      setAutomationMessage(
-        error instanceof Error ? error.message : "Unable to collapse to assistant.",
-      );
-    }
-  };
-
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="app-grid min-h-screen">
         <Sidebar
           backendStatus={backendStatus}
-          desktopAvailable={desktopAvailable}
           selectedNav={selectedNav}
-          onCollapseToAssistant={collapseMainWindow}
           onSelect={setSelectedNav}
-          onShowFloatingAssistant={openFloatingAssistant}
         />
         <section className="jobflow-main">
           <div className="jobflow-main-inner">
@@ -545,16 +532,15 @@ function App() {
                       ? "Backend offline"
                       : "Checking backend"}
                 </Badge>
-                <Button
-                  disabled={!desktopAvailable}
-                  size="sm"
-                  variant="outline"
-                  onClick={openFloatingAssistant}
-                >
-                  Float Assistant
-                </Button>
               </div>
             </div>
+            {detectedFormPrompt ? (
+              <DetectedFormPrompt
+                form={detectedFormPrompt}
+                message={automationMessage}
+                onDismiss={() => setDetectedFormPrompt(null)}
+              />
+            ) : null}
           {selectedNav === "Dashboard" ? (
             <DashboardPage
               applications={savedApplications}
@@ -581,7 +567,6 @@ function App() {
               onApplicationCreated={addSavedApplication}
               onApplicationDeleted={removeSavedApplication}
               onApplicationUpdated={updateSavedApplication}
-              onOpenJobUrl={(url) => void openJobUrl(url)}
               onReviewField={reviewCurrentField}
               onSaveReviewedAnswer={saveReviewedAnswer}
             />
@@ -592,11 +577,46 @@ function App() {
           </div>
         </section>
       </div>
-      <FloatingAssistantButton
-        state={assistantState}
-        onRun={openFloatingAssistant}
-      />
     </main>
+  );
+}
+
+function DetectedFormPrompt({
+  form,
+  message,
+  onDismiss,
+}: {
+  form: FormSchema;
+  message: string;
+  onDismiss: () => void;
+}) {
+  const title = form.job_title_hint || "Job application";
+  const company = form.company_name_hint || form.ats;
+  return (
+    <section className="mb-8 flex items-center justify-between gap-6 border-y border-border py-5 max-[760px]:flex-col max-[760px]:items-stretch">
+      <div className="min-w-0">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <Badge variant="success">Form detected</Badge>
+          <Badge variant="outline">{form.ats}</Badge>
+          <span className="text-sm text-muted-foreground">
+            {form.fields.length} fields
+          </span>
+        </div>
+        <h2 className="truncate text-xl font-semibold">{title}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {company} · {message}
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Start filling from the JobFlow Chrome extension. Saved Profile values fill
+          directly; CAPTCHA and final submission remain manual.
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center">
+        <Button type="button" variant="ghost" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -609,7 +629,6 @@ function ApplicationWorkspace({
   onApplicationCreated,
   onApplicationDeleted,
   onApplicationUpdated,
-  onOpenJobUrl,
   onReviewField,
   onSaveReviewedAnswer,
 }: {
@@ -621,7 +640,6 @@ function ApplicationWorkspace({
   onApplicationCreated: (application: ApplicationRecord) => void;
   onApplicationDeleted: (recordId: string) => void;
   onApplicationUpdated: (application: ApplicationRecord) => void;
-  onOpenJobUrl: (url: string) => void;
   onReviewField: (
     fieldId: string,
     decision: FillPlanReviewDecision,
@@ -681,7 +699,6 @@ function ApplicationWorkspace({
       </Card>
       <div className="grid grid-cols-[1fr_380px] gap-4 max-[1180px]:grid-cols-1">
         <div className="flex flex-col gap-4">
-          <LiveTestLinksCard onOpenJobUrl={onOpenJobUrl} />
           <ManualApplicationForm
             documents={documents}
             onCreated={(application) => {
@@ -707,103 +724,12 @@ function ApplicationWorkspace({
   );
 }
 
-function LiveTestLinksCard({ onOpenJobUrl }: { onOpenJobUrl: (url: string) => void }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Live Test Links</CardTitle>
-        <CardDescription>
-          Open real ATS application pages in the controlled browser for local manual QA.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid grid-cols-3 gap-2 max-[760px]:grid-cols-1">
-        {testApplicationLinks.map((link) => (
-          <Button
-            key={link.provider}
-            type="button"
-            variant="outline"
-            onClick={() => onOpenJobUrl(link.url)}
-          >
-            {link.label}
-          </Button>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-function TopBar({
-  backendStatus,
-  desktopAvailable,
-  onCollapseToAssistant,
-  onShowFloatingAssistant,
-}: {
-  backendStatus: "checking" | "online" | "offline";
-  desktopAvailable: boolean;
-  onCollapseToAssistant: () => void;
-  onShowFloatingAssistant: () => void;
-}) {
-  const statusLabel =
-    backendStatus === "online"
-      ? "Backend online"
-      : backendStatus === "offline"
-        ? "Backend offline"
-        : "Checking backend";
-  return (
-    <header className="flex h-[52px] items-center justify-between border-b border-border bg-card px-4">
-      <div className="flex items-center gap-3">
-        <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <BriefcaseBusiness />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-base font-semibold">JobFlow</span>
-          <Badge variant="success">Local Mode</Badge>
-        </div>
-      </div>
-      <div className="hidden items-center gap-2 text-sm text-muted-foreground md:flex">
-        <Lock />
-        <span>All data is stored locally on this device.</span>
-      </div>
-      <div className="flex items-center gap-3">
-        <Badge variant={backendStatus === "online" ? "success" : "outline"}>
-          {statusLabel}
-        </Badge>
-        <Button
-          disabled={!desktopAvailable}
-          size="sm"
-          variant="outline"
-          onClick={onShowFloatingAssistant}
-        >
-          Float Assistant
-        </Button>
-        <Button
-          disabled={!desktopAvailable}
-          size="sm"
-          variant="outline"
-          onClick={onCollapseToAssistant}
-        >
-          Collapse
-        </Button>
-        <select className="h-9 rounded-md border border-input bg-background px-3 text-sm">
-          <option>Profile: Default</option>
-        </select>
-      </div>
-    </header>
-  );
-}
-
 function Sidebar({
   backendStatus,
-  desktopAvailable,
-  onCollapseToAssistant,
-  onShowFloatingAssistant,
   selectedNav,
   onSelect,
 }: {
   backendStatus: "checking" | "online" | "offline";
-  desktopAvailable: boolean;
-  onCollapseToAssistant: () => void;
-  onShowFloatingAssistant: () => void;
   selectedNav: string;
   onSelect: (value: string) => void;
 }) {
@@ -835,18 +761,6 @@ function Sidebar({
           </div>
           <Progress value={backendStatus === "online" ? 100 : 32} />
         </div>
-        <SidebarRowButton
-          disabled={!desktopAvailable}
-          icon={MonitorPlay}
-          label="Float Assistant"
-          onClick={onShowFloatingAssistant}
-        />
-        <SidebarRowButton
-          disabled={!desktopAvailable}
-          icon={Square}
-          label="Collapse"
-          onClick={onCollapseToAssistant}
-        />
       </div>
     </aside>
   );
@@ -1097,8 +1011,8 @@ function FillPlanPanel({
         </div>
       ) : (
         <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-          No form inspected yet. Use the assistant to open a URL and inspect the
-          current application page.
+          No form detected yet. Keep JobFlow running and open a supported
+          application page in Chrome.
         </div>
       )}
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground max-[760px]:flex-col max-[760px]:items-start">
@@ -1435,13 +1349,12 @@ function ApplicationsTable({
               <th className="px-4 py-2 font-medium">Status</th>
               <th className="px-4 py-2 font-medium">Resume</th>
               <th className="px-4 py-2 font-medium">Answers</th>
-              <th className="px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
             {applications.length === 0 ? (
               <tr>
-                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={9}>
+                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={8}>
                   No saved applications yet. Detect a success page after manual
                   submission, review the record, then save it here.
                 </td>
@@ -1449,7 +1362,7 @@ function ApplicationsTable({
             ) : null}
             {applications.length > 0 && filteredRows.length === 0 ? (
               <tr>
-                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={9}>
+                <td className="px-4 py-6 text-center text-muted-foreground" colSpan={8}>
                   No applications match the current search or status filter.
                 </td>
               </tr>
@@ -1480,11 +1393,6 @@ function ApplicationsTable({
                   {row.resume}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{row.answers}</td>
-                <td className="px-4 py-3">
-                  <Button variant="ghost" size="icon">
-                    <MoreVertical />
-                  </Button>
-                </td>
               </tr>
             ))}
           </tbody>
@@ -1933,10 +1841,7 @@ function AssistantRail({
   state,
   successDraft,
   successResult,
-  targetUrl,
-  onUseDemoUrl,
   onSuccessDraftChange,
-  onTargetUrlChange,
   onRun,
   onPause,
   onStop,
@@ -1947,7 +1852,7 @@ function AssistantRail({
   fillResult: FillResult | null;
   formSchema: FormSchema | null;
   onAutomationStep: (
-    step: "open" | "inspect" | "plan" | "fill" | "success" | "save" | "stop",
+    step: "inspect" | "plan" | "fill" | "success" | "save" | "stop",
   ) => void;
   onChatAdjust: (message: string) => void;
   onClearEvents: () => void;
@@ -1960,10 +1865,7 @@ function AssistantRail({
   state: "idle" | "running" | "paused";
   successDraft: ApplicationRecord | null;
   successResult: SuccessDetectionResult | null;
-  targetUrl: string;
-  onUseDemoUrl: () => void;
   onSuccessDraftChange: (record: ApplicationRecord | null) => void;
-  onTargetUrlChange: (value: string) => void;
   onRun: () => void;
   onPause: () => void;
   onStop: () => void;
@@ -1996,7 +1898,7 @@ function AssistantRail({
         <Badge variant={active ? "success" : "outline"}>{active ? "Active" : "Idle"}</Badge>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" onClick={active ? onPause : () => onAutomationStep("open")}>
+        <Button variant="outline" onClick={active ? onPause : onRun}>
           {active ? <Pause data-icon="inline-start" /> : <Play data-icon="inline-start" />}
           {active ? "Pause" : "Play"}
         </Button>
@@ -2007,25 +1909,15 @@ function AssistantRail({
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>Controlled Browser</CardTitle>
-          <CardDescription>Open a job URL, then inspect the current form.</CardDescription>
+          <CardTitle>Connected Chrome</CardTitle>
+          <CardDescription>
+            Open the application in Chrome and connect it from the JobFlow extension.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          <Input
-            value={targetUrl}
-            onChange={(event) => onTargetUrlChange(event.target.value)}
-          />
-          <div className="grid grid-cols-3 gap-2">
-            <Button size="sm" variant="outline" onClick={onUseDemoUrl}>
-              Use Demo
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onAutomationStep("open")}>
-              Open URL
-            </Button>
-            <Button size="sm" onClick={() => onAutomationStep("inspect")}>
-              Inspect
-            </Button>
-          </div>
+        <CardContent>
+          <Button className="w-full" size="sm" onClick={() => onAutomationStep("inspect")}>
+            Inspect connected tab
+          </Button>
         </CardContent>
       </Card>
       <Card>
@@ -2315,36 +2207,6 @@ function ProfileLikeInput({
       <span className="leading-none font-medium">{label}</span>
       <Input value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
-  );
-}
-
-function FloatingAssistantButton({
-  state,
-  onRun,
-}: {
-  state: "idle" | "running" | "paused";
-  onRun: () => void;
-}) {
-  return (
-    <motion.div
-      animate={{ scale: state === "running" ? 1.03 : 1 }}
-      className="fixed bottom-6 right-6 z-30"
-      whileTap={{ scale: 0.96 }}
-    >
-      <Button
-        aria-label="Open floating assistant"
-        className="size-[52px] rounded-full shadow-[0_18px_50px_rgb(0_0_0_/_18%)]"
-        size="icon"
-        type="button"
-        onClick={onRun}
-      >
-        {state === "running" ? (
-          <Pause data-icon="inline-start" />
-        ) : (
-          <Play data-icon="inline-start" />
-        )}
-      </Button>
-    </motion.div>
   );
 }
 

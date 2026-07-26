@@ -97,7 +97,51 @@ def test_fill_plan_blocks_upload_when_document_file_is_missing(tmp_path: Path) -
     assert "missing from local storage" in plan.blocked_items[0].reason
 
 
-def test_sensitive_work_authorization_fact_requires_review_by_default() -> None:
+def test_fill_plan_blocks_invalid_profile_email() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="email",
+                label="Email",
+                type=FieldType.email,
+                selector="#email",
+                required=True,
+            )
+        ]
+    )
+    profile = UserProfile(identity={"email": "not-an-email"})
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.items == []
+    assert plan.blocked_items[0].field_id == "email"
+    assert "no matching user-provided fact" in plan.blocked_items[0].reason
+
+
+def test_fill_plan_maps_plain_name_label_to_complete_identity() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="name",
+                label="Name",
+                type=FieldType.text,
+                selector='[name="_systemfield_name"]',
+                required=True,
+            )
+        ]
+    )
+    profile = UserProfile(identity={"first_name": "Tao", "last_name": "Hu"})
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    assert plan.items[0].value == "Tao Hu"
+    assert plan.items[0].source_refs == [
+        "profile.identity.first_name+profile.identity.last_name"
+    ]
+
+
+def test_saved_work_authorization_fact_fills_without_per_run_review() -> None:
     html = Path("tests/fixtures/generic_application.html").read_text()
     form = FormExtractionService().extract_from_html(html)
     profile = UserProfile(
@@ -113,7 +157,7 @@ def test_sensitive_work_authorization_fact_requires_review_by_default() -> None:
     sponsorship_item = next(item for item in plan.items if item.field_id == "sponsorship")
     assert sponsorship_item.action == "select"
     assert sponsorship_item.value == "No"
-    assert sponsorship_item.needs_review is True
+    assert sponsorship_item.needs_review is False
     assert sponsorship_item.source_refs == [
         "profile.work_authorization.requires_sponsorship"
     ]
@@ -155,6 +199,35 @@ def test_sensitive_work_authorization_fact_can_fill_when_enabled() -> None:
     assert authorized_item.source_refs == ["profile.work_authorization.authorized"]
 
 
+def test_work_authorization_does_not_cross_country_boundaries() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="canada_authorized",
+                label="Do you have a legal right to work in Canada if hired?",
+                type=FieldType.select,
+                required=True,
+                options=["Yes", "No"],
+                selector="#canada_authorized",
+                sensitive=True,
+            )
+        ]
+    )
+    profile = UserProfile(
+        work_authorization={
+            "country": "US",
+            "authorized": True,
+            "requires_sponsorship": False,
+        }
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.items == []
+    assert plan.blocked_items[0].field_id == "canada_authorized"
+    assert "exact saved Profile value" in plan.blocked_items[0].reason
+
+
 def test_radio_work_authorization_maps_to_selected_option_when_enabled() -> None:
     form = FormSchema(
         fields=[
@@ -169,7 +242,7 @@ def test_radio_work_authorization_maps_to_selected_option_when_enabled() -> None
             )
         ]
     )
-    profile = UserProfile(work_authorization={"authorized": True})
+    profile = UserProfile(work_authorization={"country": "", "authorized": True})
     preferences = Preferences(fill_sensitive_fields=True)
 
     plan = FillPlanService().create_plan(form, profile, preferences)
@@ -232,9 +305,144 @@ def test_profile_preferences_fill_common_application_fields() -> None:
     assert source_refs["source"] == ["profile.preferences.heard_about_opportunity"]
 
 
+def test_greenhouse_source_and_optional_cover_letter_are_handled_safely() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="country",
+                label="Country",
+                type=FieldType.select,
+                required=True,
+                selector="#country",
+            ),
+            FormField(
+                field_id="source",
+                label="How did you initially hear about this job?",
+                type=FieldType.select,
+                required=True,
+                selector="#source",
+            ),
+            FormField(
+                field_id="cover_letter",
+                label="Cover Letter",
+                type=FieldType.file,
+                required=False,
+                selector="#cover_letter",
+            ),
+        ]
+    )
+    profile = UserProfile(
+        identity={"country": "US"},
+        preferences={"heard_about_opportunity": "LinkedIn"},
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    values = {item.field_id: item.value for item in plan.items}
+    assert values["country"] == "United States"
+    assert values["source"] == "LinkedIn"
+    cover_letter = next(item for item in plan.items if item.field_id == "cover_letter")
+    assert cover_letter.action == "skip"
+    assert cover_letter.needs_review is False
+
+
+def test_workday_contact_fields_use_precise_profile_sources() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="phoneNumber--countryPhoneCode",
+                label="Country / Territory Phone Code",
+                type=FieldType.text,
+                required=True,
+                selector="#phone-code",
+            ),
+            FormField(
+                field_id="phoneNumber",
+                label="Phone Number",
+                type=FieldType.text,
+                required=True,
+                selector="#phone",
+            ),
+            FormField(
+                field_id="extension",
+                label="Phone Extension",
+                type=FieldType.text,
+                required=False,
+                selector="#extension",
+            ),
+            FormField(
+                field_id="phone-sms-opt-in",
+                label="SMS job application updates",
+                type=FieldType.checkbox,
+                required=False,
+                selector="#sms",
+            ),
+            FormField(
+                field_id="addressLine1",
+                label="Address Line 1",
+                type=FieldType.text,
+                required=False,
+                selector="#address",
+            ),
+            FormField(
+                field_id="postalCode",
+                label="Postal Code",
+                type=FieldType.text,
+                required=False,
+                selector="#postal",
+            ),
+        ]
+    )
+    profile = UserProfile(
+        identity={
+            "phone": "5551234567",
+            "phone_country_code": "+1",
+            "phone_extension": "42",
+            "address": "123 Main St",
+            "postal_code": "10001",
+        },
+        preferences={"sms_opt_in": False},
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    values = {item.field_id: item.value for item in plan.items}
+    assert values == {
+        "phoneNumber--countryPhoneCode": "+1",
+        "phoneNumber": "5551234567",
+        "extension": "42",
+        "phone-sms-opt-in": False,
+        "addressLine1": "123 Main St",
+        "postalCode": "10001",
+    }
+    refs = {item.field_id: item.source_refs for item in plan.items}
+    assert refs["phoneNumber--countryPhoneCode"] == [
+        "profile.identity.phone_country_code"
+    ]
+    assert refs["phone-sms-opt-in"] == ["profile.preferences.sms_opt_in"]
+
+
 def test_eeo_preferences_are_gated_and_review_required() -> None:
     form = FormSchema(
         fields=[
+            FormField(
+                field_id="gender",
+                label="Gender",
+                type=FieldType.select,
+                required=False,
+                options=["Select one", "Male", "Female", "Non-binary"],
+                selector="#gender",
+            ),
+            FormField(
+                field_id="race",
+                label="Race or ethnicity",
+                type=FieldType.select,
+                required=False,
+                options=["Select one", "Asian", "White", "Hispanic or Latino"],
+                selector="#race",
+            ),
             FormField(
                 field_id="disability",
                 label="Disability status",
@@ -265,33 +473,54 @@ def test_eeo_preferences_are_gated_and_review_required() -> None:
     )
     profile = UserProfile(
         preferences={
+            "gender": "Male",
+            "race": "Asian",
             "disability_status": "No, I do not have a disability",
             "veteran_status": "I am not a protected veteran",
         }
     )
 
-    gated_plan = FillPlanService().create_plan(form, profile, Preferences())
+    plan = FillPlanService().create_plan(form, profile, Preferences())
 
-    assert gated_plan.items == []
-    assert {item.field_id for item in gated_plan.blocked_items} == {
-        "disability",
-        "veteran",
-    }
-
-    enabled_plan = FillPlanService().create_plan(
-        form, profile, Preferences(fill_eeo_fields=True)
-    )
-
-    assert enabled_plan.blocked_items == []
-    values = {item.field_id: item.value for item in enabled_plan.items}
+    assert plan.blocked_items == []
+    values = {item.field_id: item.value for item in plan.items}
     assert values == {
+        "gender": "Male",
+        "race": "Asian",
         "disability": "No, I do not have a disability",
         "veteran": "I am not a protected veteran",
     }
-    assert all(item.needs_review for item in enabled_plan.items)
-    source_refs = {item.field_id: item.source_refs for item in enabled_plan.items}
+    assert all(not item.needs_review for item in plan.items)
+    source_refs = {item.field_id: item.source_refs for item in plan.items}
+    assert source_refs["gender"] == ["profile.preferences.gender"]
+    assert source_refs["race"] == ["profile.preferences.race"]
     assert source_refs["disability"] == ["profile.preferences.disability_status"]
     assert source_refs["veteran"] == ["profile.preferences.veteran_status"]
+
+
+def test_eeo_profile_value_maps_to_one_descriptive_radio_option() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="race",
+                label="Race",
+                type=FieldType.radio,
+                required=False,
+                options=[
+                    "White (Not Hispanic or Latino)",
+                    "Asian (Not Hispanic or Latino)",
+                    "Decline to self-identify",
+                ],
+                selector='[data-field-path="_systemfield_eeoc_race"]',
+            )
+        ]
+    )
+    profile = UserProfile(preferences={"race": "Asian"})
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    assert plan.items[0].value == "Asian (Not Hispanic or Latino)"
 
 
 def test_missing_fact_policy_can_leave_required_field_blank() -> None:
@@ -343,7 +572,7 @@ def test_salary_policy_can_leave_sensitive_salary_blank() -> None:
     assert "salary policy" in salary_item.reason
 
 
-def test_salary_policy_uses_profile_preference_with_review_gate() -> None:
+def test_salary_policy_uses_exact_saved_profile_preference() -> None:
     form = FormSchema(
         fields=[
             FormField(
@@ -365,7 +594,7 @@ def test_salary_policy_uses_profile_preference_with_review_gate() -> None:
     salary_item = plan.items[0]
     assert salary_item.action == "fill"
     assert salary_item.value == "$120,000 base"
-    assert salary_item.needs_review is True
+    assert salary_item.needs_review is False
     assert salary_item.source_refs == ["profile.preferences.salary"]
 
 

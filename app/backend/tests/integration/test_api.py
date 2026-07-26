@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -20,7 +21,10 @@ from app.models.schemas import (
 def test_profile_form_fill_plan_and_success_flow(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
 
-    assert client.get("/health").json()["status"] == "ok"
+    health = client.get("/health").json()
+    assert health["status"] == "ok"
+    assert health["service"] == "jobflow-backend"
+    assert health["protocol_version"] == 2
     assert client.post("/browser/stop").json()["status"] == "stopped"
     resume = tmp_path / "resume.pdf"
     resume.write_bytes(b"%PDF-1.4 test resume")
@@ -103,6 +107,36 @@ def test_profile_form_fill_plan_and_success_flow(tmp_path: Path) -> None:
     assert success["proposed_record"]["company_name"] == "Acme AI"
 
 
+def test_chrome_extension_pairing_updates_local_status(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+    initial = client.get(
+        "/extension/status", params={"include_pairing_token": "true"}
+    ).json()
+    assert initial["connected"] is False
+    assert initial["pairing_token"]
+
+    with client.websocket_connect(
+        f"/extension/ws?token={initial['pairing_token']}"
+    ) as websocket:
+        websocket.send_json(
+            {
+                "type": "hello",
+                "protocol": 1,
+                "extension_version": "0.1.0-test",
+                "tab": {
+                    "url": "https://jobs.example.com/software-engineer",
+                    "title": "Software Engineer",
+                },
+            }
+        )
+        connected = client.get("/extension/status").json()
+        assert connected["connected"] is True
+        assert connected["url"] == "https://jobs.example.com/software-engineer"
+        assert connected["pairing_token"] == ""
+
+    assert client.get("/extension/status").json()["connected"] is False
+
+
 def test_demo_pages_are_served_for_manual_qa(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
 
@@ -114,6 +148,18 @@ def test_demo_pages_are_served_for_manual_qa(tmp_path: Path) -> None:
     greenhouse_response = client.get("/demo/greenhouse/application")
     assert greenhouse_response.status_code == 200
     assert "data-ats=\"greenhouse\"" in greenhouse_response.text
+
+    ashby_response = client.get("/demo/ashby/application")
+    assert ashby_response.status_code == 200
+    assert "ashby-application-form" in ashby_response.text
+
+    oracle_response = client.get("/demo/oracle/application")
+    assert oracle_response.status_code == 200
+    assert "oracle-recruiting" in oracle_response.text
+
+    workday_response = client.get("/demo/workday/application")
+    assert workday_response.status_code == 200
+    assert "data-automation-id=\"applyFlowPage\"" in workday_response.text
 
     lever_response = client.get("/demo/lever/application")
     assert lever_response.status_code == 200
@@ -133,7 +179,6 @@ def test_preferences_store_model_connection_settings(tmp_path: Path) -> None:
     preferences = Preferences(
         ai_provider="deepseek",
         ai_model="deepseek-v4-flash",
-        ai_api_key="local-test-key",
         ai_base_url="https://api.deepseek.com",
     )
 
@@ -145,8 +190,23 @@ def test_preferences_store_model_connection_settings(tmp_path: Path) -> None:
     saved = get_response.json()
     assert saved["ai_provider"] == "deepseek"
     assert saved["ai_model"] == "deepseek-v4-flash"
-    assert saved["ai_api_key"] == "local-test-key"
     assert saved["ai_base_url"] == "https://api.deepseek.com"
+    assert "ai_api_key" not in saved
+
+    credential_response = client.put(
+        "/credentials/deepseek", json={"api_key": "local-test-key"}
+    )
+    assert credential_response.status_code == 200
+    assert credential_response.json() == {
+        "provider": "deepseek",
+        "configured": True,
+        "storage": "memory",
+    }
+    assert "local-test-key" not in credential_response.text
+    assert client.get("/credentials/deepseek").json()["configured"] is True
+    assert client.get("/data/export").json()["preferences"] == saved
+    assert "local-test-key" not in client.get("/data/export").text
+    assert client.delete("/credentials/deepseek").json()["configured"] is False
 
 
 def test_document_import_open_answer_and_data_export(tmp_path: Path) -> None:
@@ -205,6 +265,7 @@ def test_document_import_open_answer_and_data_export(tmp_path: Path) -> None:
     export_response = client.get("/data/export")
     assert export_response.status_code == 200
     exported = export_response.json()
+    assert exported["schema_version"] == 1
     assert exported["profile"]["documents"][0]["id"] == document["id"]
     assert exported["applications"][0]["company_name"] == "Acme AI"
 
@@ -215,6 +276,42 @@ def test_document_import_open_answer_and_data_export(tmp_path: Path) -> None:
     assert imported["profile"]["documents"][0]["id"] == document["id"]
     assert imported["applications"][0]["company_name"] == "Acme AI"
     assert imported["profile"]["answer_bank"][0]["id"] == "answer_default"
+
+    unsupported = {**exported, "schema_version": 2}
+    assert import_client.post("/data/import", json=unsupported).status_code == 422
+
+
+def test_legacy_plaintext_api_key_is_scrubbed_from_preferences_storage(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "jobflow.sqlite"
+    client = TestClient(create_app(db_path))
+    client.get("/preferences")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "update preferences_state set payload = ? where id = 'main'",
+            (
+                json.dumps(
+                    {
+                        **Preferences().model_dump(mode="json"),
+                        "ai_provider": "openai",
+                        "ai_model": "gpt-5.6-terra",
+                        "ai_api_key": "legacy-plaintext-secret",
+                    }
+                ),
+            ),
+        )
+
+    response = client.get("/preferences")
+
+    assert response.status_code == 200
+    assert "ai_api_key" not in response.json()
+    with sqlite3.connect(db_path) as connection:
+        stored_payload = connection.execute(
+            "select payload from preferences_state where id = 'main'"
+        ).fetchone()[0]
+    assert "legacy-plaintext-secret" not in stored_payload
+    assert "ai_api_key" not in stored_payload
 
 
 def test_document_delete_removes_profile_reference_and_vault_file(
@@ -333,6 +430,44 @@ def test_resume_upload_replaces_previous_resume_reference_and_vault_file(
     assert Path(second_document["path"]).exists()
     assert Path(second_document["path"]).read_bytes() == b"%PDF-1.4 second uploaded resume"
     assert not first_vault_path.exists()
+
+    pairing_token = client.get(
+        "/extension/status", params={"include_pairing_token": "true"}
+    ).json()["pairing_token"]
+    denied = client.get(
+        f"/extension/documents/{second_document['id']}", params={"token": "wrong"}
+    )
+    assert denied.status_code == 403
+    extension_read = client.get(
+        f"/extension/documents/{second_document['id']}",
+        params={"token": pairing_token},
+    )
+    assert extension_read.status_code == 200
+    assert extension_read.content == b"%PDF-1.4 second uploaded resume"
+    assert extension_read.headers["access-control-allow-origin"] == "*"
+
+
+def test_resume_upload_rejects_unsafe_type_and_oversized_content(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+
+    unsafe_response = client.post(
+        "/documents/upload",
+        params={"kind": "resume", "name": "Resume", "filename": "resume.html"},
+        content=b"<script>alert('resume')</script>",
+        headers={"content-type": "text/html"},
+    )
+    assert unsafe_response.status_code == 422
+    assert "Unsupported application document type" in unsafe_response.json()["detail"]
+
+    oversized_response = client.post(
+        "/documents/upload",
+        params={"kind": "resume", "name": "Resume", "filename": "resume.pdf"},
+        content=b"x" * (10 * 1024 * 1024 + 1),
+        headers={"content-type": "application/pdf"},
+    )
+    assert oversized_response.status_code == 422
+    assert "10 MB" in oversized_response.json()["detail"]
+    assert client.get("/profile").json()["documents"] == []
 
 
 def test_document_delete_does_not_remove_external_profile_file(

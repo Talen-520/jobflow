@@ -186,13 +186,12 @@ DEMO_GREENHOUSE_APPLICATION_HTML = """<!doctype html>
         <label for="phone">Phone</label>
         <input id="phone" name="phone" type="tel" />
 
-        <fieldset>
-          <legend>Are you authorized to work in the United States?</legend>
-          <label for="authorized_yes">Yes</label>
-          <input id="authorized_yes" name="authorized" type="radio" value="Yes" />
-          <label for="authorized_no">No</label>
-          <input id="authorized_no" name="authorized" type="radio" value="No" />
-        </fieldset>
+        <label id="authorized-label" for="authorized">Are you authorized to work in the United States?</label>
+        <input id="authorized" role="combobox" aria-labelledby="authorized-label" data-options="Yes|No" required />
+        <div role="listbox" aria-label="Authorization options">
+          <button role="option" type="button" data-value="Yes">Yes</button>
+          <button role="option" type="button" data-value="No">No</button>
+        </div>
 
         <label for="resume">Resume/CV</label>
         <input id="resume" name="resume" type="file" required />
@@ -202,10 +201,135 @@ DEMO_GREENHOUSE_APPLICATION_HTML = """<!doctype html>
 
         <button type="submit">Submit application manually</button>
       </form>
+      <script>
+        document.querySelectorAll('[role="option"]').forEach((option) => {
+          option.addEventListener('click', () => {
+            document.querySelector('#authorized').value = option.dataset.value;
+          });
+        });
+      </script>
     </main>
   </body>
 </html>
 """
+
+
+DEMO_ASHBY_APPLICATION_HTML = """<!doctype html>
+<html lang="en">
+  <head><title>Product Engineer - Ashby Demo Co</title></head>
+  <body data-ashby-page="application">
+    <main>
+      <h1>Product Engineer</h1>
+      <form class="ashby-application-form" action="/demo/ashby/submitted" method="post" enctype="multipart/form-data">
+        <div class="ashby-application-form-field-entry" data-field-path="_systemfield_name">
+          <label for="_systemfield_name">Name</label>
+          <input id="_systemfield_name" name="_systemfield_name" required />
+        </div>
+        <div class="ashby-application-form-field-entry" data-field-path="_systemfield_email">
+          <label for="_systemfield_email">Email</label>
+          <input id="_systemfield_email" name="_systemfield_email" type="email" required />
+        </div>
+        <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">
+          <label for="_systemfield_resume">Resume</label>
+          <input id="_systemfield_resume" type="file" />
+        </div>
+        <div class="ashby-application-form-field-entry" data-field-path="sponsorship">
+          <label>Will you require sponsorship?</label>
+          <input type="checkbox" aria-hidden="true" />
+          <button type="button" data-value="Yes">Yes</button>
+          <button type="button" data-value="No">No</button>
+        </div>
+        <div class="ashby-application-form-field-entry" data-field-path="motivation">
+          <label for="motivation">Why are you interested in this role?</label>
+          <textarea id="motivation" name="motivation"></textarea>
+        </div>
+        <button type="submit">Submit Application</button>
+      </form>
+      <script>
+        document.querySelectorAll('[data-field-path="sponsorship"] button').forEach((button) => {
+          button.addEventListener('click', () => {
+            document.querySelectorAll('[data-field-path="sponsorship"] button').forEach((item) => item.setAttribute('aria-pressed', 'false'));
+            button.setAttribute('aria-pressed', 'true');
+          });
+        });
+      </script>
+    </main>
+  </body>
+</html>
+"""
+
+
+DEMO_ORACLE_APPLICATION_HTML = """<!doctype html>
+<html lang="en">
+  <head><title>Cloud Engineer - Oracle Demo Co</title></head>
+  <body class="oracle-recruiting">
+    <main data-page="quick-email-verification">
+      <h1>Cloud Engineer</h1>
+      <p>Oracle Recruiting local demo.</p>
+      <form action="/demo/oracle/submitted" method="post" enctype="multipart/form-data">
+        <label for="primary-email-0">Email Address</label>
+        <input id="primary-email-0" name="primary-email" type="email" aria-required="true" />
+        <label for="linkedin">LinkedIn Profile</label>
+        <input id="linkedin" name="linkedin" />
+        <label for="resume">Upload Resume</label>
+        <input id="resume" name="resume" type="file" />
+        <label for="legal-disclaimer-checkbox">I have read the Important Privacy Information</label>
+        <input id="legal-disclaimer-checkbox" type="checkbox" />
+        <input id="honey-pot-1" name="honey-pot" aria-label="honeypot" />
+        <textarea id="g-recaptcha-response" name="g-recaptcha-response"></textarea>
+        <button type="submit">Next</button>
+      </form>
+    </main>
+  </body>
+</html>
+"""
+
+
+DEMO_WORKDAY_APPLICATION_HTML = """<!doctype html>
+<html lang="en">
+  <head><title>Software Engineer - Workday Demo Co</title></head>
+  <body>
+    <main data-automation-id="applyFlowPage">
+      <h1 data-automation-id="jobTitleHeading">Software Engineer</h1>
+      <ol data-automation-id="progressBar"><li data-automation-id="progressBarActiveStep">current step 2 of 6</li></ol>
+      <form action="/demo/workday/submitted" method="post">
+        <div data-automation-id="formField-name">
+          <label for="workday-name">Full Legal Name</label>
+          <input id="workday-name" data-automation-id="name" required />
+        </div>
+        <div data-automation-id="formField-email">
+          <label for="workday-email">Email Address</label>
+          <input id="workday-email" data-automation-id="email" type="email" required />
+        </div>
+        <div data-automation-id="formField-phone">
+          <label for="workday-phone">Phone Number</label>
+          <input id="workday-phone" data-automation-id="phone" type="tel" />
+        </div>
+        <div data-automation-id="formField-sponsorship">
+          <label for="workday-sponsorship">Will you require sponsorship?</label>
+          <select id="workday-sponsorship" data-automation-id="sponsorship">
+            <option>Select one</option><option>No</option><option>Yes</option>
+          </select>
+        </div>
+        <div data-automation-id="formField-password">
+          <label for="workday-password">Password</label>
+          <input id="workday-password" data-automation-id="password" type="password" required />
+        </div>
+        <input data-automation-id="beecatcher" name="website" />
+        <button type="submit">Save and Continue</button>
+      </form>
+    </main>
+  </body>
+</html>
+"""
+
+
+DEMO_ATS_SUBMITTED_HTML = {
+    "greenhouse": "<html><body data-ats='greenhouse'><h1>Application complete</h1><p>We've received your application.</p></body></html>",
+    "ashby": "<html><body data-ashby-page='application'><h1>Application complete</h1><p>Application submitted successfully.</p></body></html>",
+    "oracle": "<html><body class='oracle-recruiting'><h1>Application complete</h1><p>Your application was submitted.</p></body></html>",
+    "workday": "<html><body data-automation-id='applyFlowPage'><h1>Application complete</h1><p>You've successfully submitted your application.</p></body></html>",
+}
 
 
 DEMO_LEVER_APPLICATION_HTML = """<!doctype html>

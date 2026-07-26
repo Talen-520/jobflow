@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default JobFlow desktop capability set.",
-  "windows": ["main", "floating-assistant"],
+  "windows": ["main"],
   "permissions": ["core:default"]
 }

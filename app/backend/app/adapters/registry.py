@@ -12,11 +12,11 @@ from app.adapters.workday import WorkdayAdapter
 class AdapterRegistry:
     def __init__(self) -> None:
         self.adapters: list[ApplicationAdapter] = [
-            GreenhouseAdapter(),
-            LeverAdapter(),
             AshbyAdapter(),
             WorkdayAdapter(),
             OracleAdapter(),
+            GreenhouseAdapter(),
+            LeverAdapter(),
             GenericFormAdapter(),
         ]
 

@@ -3,59 +3,64 @@
 JobFlow is a local-first desktop copilot for job applications.
 
 The app helps a user maintain a local profile, inspect job application forms,
-draft a safe fill plan from user-approved facts, fill high-confidence fields,
-pause for review when information is sensitive or uncertain, and save a
+draft a safe fill plan from user-approved facts, automatically fill exact saved
+Profile values, leave missing information untouched, and save a
 structured application record after the user manually submits the application.
 
 ## Current Status
 
-This repository contains the MVP scaffold:
+This repository contains a local desktop MVP whose Chrome-extension transport
+is implemented and undergoing release QA:
 
 - Tauri desktop shell under `app/desktop`.
 - React + TypeScript operational UI.
-- Main command-center workspace plus a floating assistant rail for live
-  application execution.
-- Tauri-managed bottom-right floating assistant window with play, pause, stop,
-  inspect, safe fill, chat adjustment, success detection, and save-record
-  controls.
+- Main workspace for profile, records, model settings, and Chrome connection
+  status.
+- Automatic supported-ATS detection that opens the extension toolbar popup
+  with a manual **Start filling** action.
 - FastAPI local backend under `app/backend`.
 - SQLite-backed profile, preferences, and application record storage.
-- Playwright-backed browser controller with a persistent local browser profile.
+- Manifest V3 Chrome extension that connects automatically to the local backend,
+  refreshes stale local credentials, observes supported ATS frames, and owns
+  current-page fill controls.
+- The extension preserves the user's normal Chrome session and automatically
+  reports supported Greenhouse, Ashby, Oracle, Workday, and Lever forms. JobFlow
+  does not launch a separate automation browser or reuse Chrome's profile directory.
 - Simplified main navigation for Dashboard, Profile, Applications, and Settings.
-- Generic form extraction, Greenhouse/Lever/Ashby adapters, and basic
-  Workday/Oracle detection with generic extraction fallback.
+- Generic and Lever form handling plus dedicated Greenhouse, Ashby, Oracle, and
+  Workday detection, extraction, locator normalization, fill behavior, and
+  success-detection strategies.
 - Source-backed fill-plan services and safe fill execution.
 - Review-required and blocked fill-plan fields can be accepted, edited with
   user-provided values, or marked blank before another safe-fill run.
 - User-edited review answers for non-sensitive open text fields can be saved as
   reusable answer-bank presets for later source-backed drafting.
-- Source-backed work authorization and sponsorship mapping from saved profile
-  facts, with review required by default for sensitive fields.
+- Source-backed work authorization and sponsorship mapping from exact saved
+  Profile values without per-run review.
 - Source-backed resume/cover-letter upload planning that only uses existing
   local vault files.
-- Source-backed company, university, application-source, disability, and veteran
-  mapping from saved profile fields, with EEO fields gated and review-required.
-- Tool-backed open-answer drafting with source-reference validation and
-  deterministic fallback.
+- Source-backed company, university, application-source, gender, race,
+  disability, and veteran mapping from exact saved Profile fields.
+- AI use is limited to open questions such as motivation and company interest;
+  answers require validated Profile or detected-form source references.
 - Profile resume file upload and removal for the app-managed local resume
   reference; uploading a new resume automatically replaces the previous resume
   record and old vault file.
-- Settings screen JSON export/import for local profile, preferences, document
-  references, and application records.
+- Settings screen versioned JSON export/import for migrating local profile,
+  preferences, document references, and application records.
 - Settings model connection fields auto-save locally. Ollama allows manual
   model-name entry; DeepSeek, OpenAI, and Gemini use provider model dropdowns
-  with locally stored API keys and base URLs.
+  with base URLs and API keys stored in the app-data `.env` file.
 - Settings controls for salary, relocation, missing-fact, and low-confidence
   fill-plan policies.
 - Live automation event stream with recent local history and a clear-history
   control for the assistant panel.
-- Main workspace refreshes local profile and application state from automation
-  events, so floating-assistant saves and profile updates show up without a
-  manual reload.
+- Main workspace refreshes local profile, detected forms, and application state
+  without a manual reload.
 - Redacted automation event history so field values, chat text, HTML, file
   paths, and URL query strings are not written to local event logs.
 - Local demo application and submitted pages for manual end-to-end QA through
-  the controlled browser.
+  the connected Chrome tab.
 - Root-level smoke script for fast local verification of the demo application,
   source-backed fill plan review, safe-fill dry run, success detection, and
   application record persistence.
@@ -71,16 +76,75 @@ This repository contains the MVP scaffold:
   resume state, saved application stats, current fill-plan state, and next best
   action.
 - The left sidebar is navigation-only: Dashboard, Profile, Applications, and
-  Settings. Live application execution belongs in the floating assistant or the
-  Applications workspace.
-- Applications workspace stats, fill-plan table, review panel, and live ATS test
-  links are driven by current local app state instead of bundled sample rows.
-- Profile UI for resume upload, full name, email, phone, location, company,
-  LinkedIn URL, GitHub URL, portfolio URL, work authorization, sponsorship,
-  university, opportunity source, disability status, and veteran status.
+  Settings. The main workspace shows detected-form status without fill actions.
+- Applications workspace stats, fill-plan table, and review panel are driven by
+  current local app state instead of bundled sample rows or QA links.
+- Profile UI for resume upload, legal and preferred names, email, precise phone
+  fields, structured address, company, LinkedIn URL, GitHub URL, portfolio URL,
+  US work authorization, visa sponsorship, non-compete status, SMS consent,
+  university, opportunity source, gender, race, disability status, and veteran
+  status.
 - Profile and Settings changes auto-save after editing; there are no page-level
   save buttons for these local preference screens.
 - Safety rules that prevent unsupported factual claims and final auto-submit.
+
+## Previous Release Milestone
+
+The distributable, real-page validated desktop MVP milestone was completed and
+verified on July 12, 2026. Its release contract is:
+
+- Greenhouse, Ashby, Oracle Recruiting, and Workday each own dedicated form
+  extraction, stable field-location, fill, and success-detection logic. A
+  dedicated adapter may reuse shared primitives, but it must not merely inherit
+  the generic behavior unchanged.
+- Every dedicated adapter has representative fixture coverage for identity,
+  select/radio/checkbox controls, resume upload, open questions, multi-step
+  behavior where applicable, and post-submit success signals.
+- The provided live Greenhouse, Oracle, Ashby, and Workday links are exercised
+  through a user-connected Chrome tab without final submission.
+- Ollama, DeepSeek, OpenAI, and Gemini settings drive the actual source-backed
+  open-answer client. Unsupported claims and invalid source references still
+  force a safe fallback.
+- API keys are stored in `~/Library/Application Support/com.jobflow.desktop/.env`
+  on macOS, outside SQLite/JSON preference payloads, and are never returned by
+  status APIs or included in logs and local-data exports.
+- The FastAPI backend is packaged and launched as a Tauri sidecar so a release
+  build does not require a source checkout, Python environment, or `uv` command.
+- Desktop startup validates the backend protocol reported by `/health` instead
+  of trusting any process listening on port `8765`. On macOS, a verified stale
+  JobFlow sidecar is retired before the bundled sidecar starts.
+- The extension toolbar popup performs one bounded current-page run after the
+  user clicks **Start filling**. It never advances pages or submits the
+  application.
+- Backend, frontend, Rust, smoke, packaged desktop, and real-page QA gates pass.
+
+Verification evidence:
+
+- `84 passed` in the backend suite, plus desktop TypeScript/Vite and Rust checks.
+- Root smoke passed across generic, Lever, Greenhouse, Ashby, Oracle, and
+  Workday fixtures, including dedicated success signals and DOM fill checks.
+- Live Greenhouse, Ashby, Oracle, and Workday pages were inspected without
+  filling or final submission during the previous Playwright-backed milestone.
+  The extension transport now owns real-page execution and must pass the Chrome
+  QA checklist before the next release tag.
+- The PyInstaller one-file sidecar passed isolated health/app-data smoke.
+- `JobFlow.app` bundled both arm64 executables, launched the sidecar, completed
+  the local demo through Review, Confirm record, and Saved, and stopped the
+  sidecar on app exit.
+
+## Current Extension Verification
+
+- Backend suite: `84 passed`.
+- Extension JavaScript syntax checks and `20` extension tests: passed.
+- Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
+- Root smoke passed through a pairing-authenticated extension protocol
+  simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.
+- A live Avoca/Ashby production check on extension `0.4.3` filled and verified
+  ten source-backed fields with zero errors and no final submission. The
+  relocation/in-office commitment remained blocked because no exact Profile
+  fact existed. Live
+  Greenhouse, Oracle, and Workday checks remain required before the next
+  distributable release is declared verified.
 
 ## Quick Start
 
@@ -92,15 +156,35 @@ npm run dev
 
 Then open `http://127.0.0.1:1420`.
 
+### Install the local Chrome extension
+
+The development extension has no build step:
+
+1. Open `chrome://extensions` in the user's normal Chrome profile.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked** and select `app/extension` from this repository.
+4. Start JobFlow and reload the extension once after source changes.
+5. Open a supported job application in Chrome.
+6. JobFlow detects the form and opens the extension toolbar popup with
+   **Start filling** and an optional **AI custom questions** toggle. If Chrome
+   declines automatic popup opening, the JobFlow icon shows a `1` badge; click
+   the icon to open the same controls.
+
+Known ATS host permissions are limited to Greenhouse, Ashby, Oracle, Workday,
+and Lever. Generic forms outside those hosts are not automatically observed.
+Backend connection and supported-form detection are automatic.
+The extension republishes its current detection state immediately after every
+WebSocket reconnect, so an already-open form does not wait for a heartbeat.
+
 For the Tauri desktop shell:
 
 ```bash
 npm run dev:tauri
 ```
 
-Inside the desktop shell, use **Float Assistant** to open the compact
-bottom-right assistant window, or **Collapse** to hide the main workspace and
-keep only the assistant visible.
+Closing the desktop window hides it while the local detector continues running.
+Opening a supported application form leaves Chrome focused and opens the
+extension toolbar popup without injecting controls into the employer page.
 
 For local manual QA, use the default demo URL:
 
@@ -112,20 +196,21 @@ ATS-specific local fixtures are also served for adapter checks:
 
 ```text
 http://127.0.0.1:8765/demo/greenhouse/application
+http://127.0.0.1:8765/demo/ashby/application
+http://127.0.0.1:8765/demo/oracle/application
+http://127.0.0.1:8765/demo/workday/application
 http://127.0.0.1:8765/demo/lever/application
 ```
 
-Open it from JobFlow, inspect the form, create a fill plan, review paused
-fields, safe-fill the form, manually click submit on the demo page, then run
-success detection.
+Dedicated Greenhouse, Ashby, Oracle, and Workday fixture routes exercise their
+platform-specific selectors and success signals. These fixtures remain local
+and never submit data to an employer.
 
-The Applications workspace also includes live manual QA shortcuts for:
-
-```text
-https://job-boards.greenhouse.io/getbuilt/jobs/4713164005
-https://ibqbjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/Honeywell/jobs/preview/135537/apply/email?keyword=software&mode=location
-https://www.ashbyhq.com/careers?ashby_jid=448baa35-cd72-468a-bcab-51dd55b7a275
-```
+Open the demo URL in Chrome, wait for automatic detection, then click
+**Start filling** in the extension popup. Review paused fields, manually submit
+the local demo page, and run success detection from the application workflow.
+Live ATS QA links belong only in development documentation and never appear in
+the production UI.
 
 For a fast automated smoke check of the same backend flow:
 
@@ -134,18 +219,62 @@ npm run smoke
 ```
 
 The smoke script starts a temporary backend on `127.0.0.1:18765` with isolated
-SQLite, vault, and browser-profile paths. It does not submit a real job
-application.
+SQLite and vault paths, then connects an extension-protocol simulator. It does
+not submit a real job application.
 
-Current remaining demo gap: the backend demo, adapter extraction, fill-plan
-generation, safe-fill logic, and smoke harness exist, but the main desktop
-workspace still needs a polished one-click demo path wired into the live UI. The
-floating assistant remains the intended execution surface for demo/application
-work.
+Build and verify the standalone FastAPI sidecar for the current Rust target:
+
+```bash
+cd app/backend
+uv sync --extra test --extra build
+cd ../..
+npm run backend:sidecar
+npm run backend:sidecar:smoke
+```
+
+`npm --workspace app/desktop run tauri build` runs the frontend build and
+sidecar build before creating the desktop bundle. Release builds launch the
+bundled backend automatically and store SQLite and documents in the
+operating-system app-data directory. The user's Chrome profile remains owned by
+Chrome and is never copied into JobFlow. No Python or `uv` installation is
+required to run the resulting application.
+
+The extension toolbar popup handles exactly one page per click: inspect,
+prepare exact Profile values, optionally draft source-backed custom open
+answers, fill eligible fields, and stop. Navigate to the next page manually;
+JobFlow detects its new form signature and prompts the popup again.
+
+All launch modes now default to the same operating-system data directory. On
+macOS this is `~/Library/Application Support/com.jobflow.desktop`. A one-time
+legacy merge preserves existing non-empty profile fields, imports missing data,
+and moves the newest resume into the persistent vault. Rebuilding the app does
+not replace this directory.
+
+The directory keeps runtime data separated by responsibility:
+
+```text
+jobflow.sqlite            Profile, preferences, records, and redacted events
+.env                      Provider API keys; local mode 0600
+extension-pairing-token   Internal Chrome connection credential; mode 0600
+vault/                    Resume and other local documents
+```
+
+SQLite remains the runtime source of truth. Settings exports a versioned JSON
+snapshot for backup and migration; secrets and document binaries are excluded.
+
+Validate the extension scripts and safety gate with:
+
+```bash
+npm run extension:check
+npm run extension:test
+```
 
 ## Product Boundary
 
 JobFlow does not bypass CAPTCHA, MFA, bot checks, or access controls.
+
+When a CAPTCHA is detected, extension writes stop and the assistant asks the
+user to complete verification manually in Chrome before inspecting again.
 
 Final application submission is manual. AI-generated open-ended answers must be
 grounded in user-provided profile facts, project facts, resume facts, or answer

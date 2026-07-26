@@ -22,6 +22,15 @@
         <label for="resume">Resume/CV</label>
         <input id="resume" name="resume" type="file" required />
 
+        <label id="authorization-label" for="authorization">Are you legally authorized to work in the United States?</label>
+        <input
+          id="authorization"
+          role="combobox"
+          aria-labelledby="authorization-label"
+          aria-required="true"
+          data-options="Yes|No"
+        />
+
         <label for="question_123">Why are you interested in this role?</label>
         <textarea id="question_123" name="question_123"></textarea>
       </form>

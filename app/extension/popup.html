@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JobFlow</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="mark">J</div>
+        <div>
+          <h1>JobFlow</h1>
+          <p id="status">Connecting</p>
+        </div>
+      </header>
+      <p class="detail" id="detail">Connecting securely to the local JobFlow app.</p>
+      <section class="controls">
+        <label class="option">
+          <span>
+            <strong>AI custom questions</strong>
+            <small>Source-backed open answers only.</small>
+          </span>
+          <input id="ai-custom-fields" type="checkbox" />
+        </label>
+        <button id="start-fill" type="button" disabled>Start filling</button>
+        <p id="fill-status" class="fill-status"></p>
+      </section>
+      <p class="boundary">This popup opens when a supported form is detected. CAPTCHA and final submission stay manual.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

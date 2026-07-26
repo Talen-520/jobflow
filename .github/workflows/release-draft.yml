@@ -1,0 +1,33 @@
+name: Release Draft
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: uv sync --extra test --extra build
+        working-directory: app/backend
+      - run: npm run backend:sidecar
+      - run: npm --workspace app/desktop run tauri build -- --bundles app
+      - run: ditto -c -k --keepParent app/desktop/src-tauri/target/release/bundle/macos/JobFlow.app JobFlow-macOS.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: JobFlow-macOS.zip

@@ -1,8 +1,11 @@
 from app.services.demo_pages import (
     DEMO_APPLICATION_HTML,
+    DEMO_ASHBY_APPLICATION_HTML,
     DEMO_GREENHOUSE_APPLICATION_HTML,
     DEMO_LEVER_APPLICATION_HTML,
+    DEMO_ORACLE_APPLICATION_HTML,
     DEMO_SUBMITTED_HTML,
+    DEMO_WORKDAY_APPLICATION_HTML,
 )
 from app.services.form_extraction import FormExtractionService
 from app.services.success_detection import SuccessDetectionService
@@ -52,7 +55,7 @@ def test_demo_submitted_page_detects_success() -> None:
     assert result.proposed_record.job_title == "Frontend Engineer"
 
 
-def test_demo_ats_pages_extract_as_greenhouse_and_lever() -> None:
+def test_demo_ats_pages_extract_representative_fields() -> None:
     cases = [
         (
             DEMO_GREENHOUSE_APPLICATION_HTML,
@@ -69,6 +72,30 @@ def test_demo_ats_pages_extract_as_greenhouse_and_lever() -> None:
             "Example Analytics",
             "Frontend Engineer",
             {"name", "email", "authorized", "urls[LinkedIn]", "resume"},
+        ),
+        (
+            DEMO_ASHBY_APPLICATION_HTML,
+            "http://127.0.0.1:8765/demo/ashby/application",
+            "ashby",
+            "Ashby Demo Co",
+            "Product Engineer",
+            {"_systemfield_name", "_systemfield_email", "_systemfield_resume"},
+        ),
+        (
+            DEMO_ORACLE_APPLICATION_HTML,
+            "http://127.0.0.1:8765/demo/oracle/application",
+            "oracle",
+            "Oracle Demo Co",
+            "Cloud Engineer",
+            {"primary-email", "linkedin", "resume"},
+        ),
+        (
+            DEMO_WORKDAY_APPLICATION_HTML,
+            "http://127.0.0.1:8765/demo/workday/application",
+            "workday",
+            "Workday Demo Co",
+            "Software Engineer",
+            {"workday-name", "workday-email", "workday-phone"},
         ),
     ]
 

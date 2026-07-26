@@ -18,14 +18,32 @@ from app.tools.profile_tools import ProfileTools, ToolResult
 
 SENSITIVE_TERMS = [
     "gender",
+    "man",
+    "woman",
+    "non-binary",
+    "transgender",
     "race",
     "ethnicity",
+    "asian",
+    "american indian",
+    "alaska native",
+    "african american",
+    "native hawaiian",
+    "pacific islander",
+    "hispanic",
+    "latino",
+    "sexual orientation",
+    "under 30",
+    "over 30",
     "veteran",
     "disability",
     "sponsorship",
     "visa",
     "authorization",
     "authorized",
+    "legal right to work",
+    "eligibility to work",
+    "eligible to work",
     "salary",
     "compensation",
     "relocation",
@@ -54,8 +72,6 @@ class FillPlanService:
     ) -> FillPlanItem | BlockedItem:
         label = self._field_text(field)
         if self._is_eeo(label):
-            if not preferences.fill_eeo_fields:
-                return BlockedItem(field_id=field.field_id, reason="EEO field disabled")
             eeo_item = self._map_eeo_field(field, tools, label)
             if eeo_item:
                 return eeo_item
@@ -67,14 +83,11 @@ class FillPlanService:
         if field.sensitive or self._is_sensitive(label):
             sensitive_item = self._map_sensitive_field(field, tools, label)
             if sensitive_item:
-                if not preferences.fill_sensitive_fields:
-                    sensitive_item.needs_review = True
                 return sensitive_item
-            if not preferences.fill_sensitive_fields:
-                return BlockedItem(
-                    field_id=field.field_id,
-                    reason="Sensitive field requires user confirmation",
-                )
+            return BlockedItem(
+                field_id=field.field_id,
+                reason="Sensitive field is missing an exact saved Profile value",
+            )
 
         direct = self._direct_profile_mapping(label, tools)
         if direct:
@@ -97,15 +110,32 @@ class FillPlanService:
     def _direct_profile_mapping(
         self, label: str, tools: ProfileTools
     ) -> ToolResult | None:
+        if re.search(
+            r"\b(country|territory)\s*(?:/|or)?\s*(?:phone\s*)?code\b"
+            r"|\bphone\s+country\s+code\b",
+            label,
+        ):
+            return tools.get_profile_field("identity.phone_country_code")
+        if re.search(r"\bphone\s+extension\b|(?:^|\s)extension(?:\s|$)", label):
+            return tools.get_profile_field("identity.phone_extension")
+        if re.search(r"\bsms\b|\btext\s+message\b|\bopt[\s-]?in\b", label):
+            return None
+
         rules = [
             (r"\bfirst\b.*\bname\b", "identity.first_name"),
+            (r"\bmiddle\b.*\bname\b", "identity.middle_name"),
             (r"\blast\b.*\bname\b", "identity.last_name"),
             (r"\bpreferred\b.*\bname\b", "identity.preferred_name"),
             (r"\bfull\b.*\bname\b", None),
+            (r"^name\b", None),
             (r"\bemail\b", "identity.email"),
             (r"\bphone\b|\bmobile\b", "identity.phone"),
+            (r"\baddress\s*(?:line)?\s*2\b|\baddress2\b", "identity.address_line2"),
+            (r"\bpostal\b|\bzip(?:\s+code)?\b", "identity.postal_code"),
+            (r"\bstate\b|\bprovince\b", "identity.state"),
+            (r"\bcountry\b|\bterritory\b", "identity.country"),
             (r"\blocation\b|\bcity\b", "identity.location"),
-            (r"\baddress\b", "identity.address"),
+            (r"\bstreet\b|\baddress\b", "identity.address"),
             (r"\blinkedin\b", "links.linkedin"),
             (r"\bgithub\b", "links.github"),
             (r"\bportfolio\b|\bwebsite\b", "links.portfolio"),
@@ -122,7 +152,12 @@ class FillPlanService:
                             confidence=0.95,
                         )
                     return None
-                return tools.get_profile_field(path)
+                result = tools.get_profile_field(path)
+                if path == "identity.email" and result and not self._valid_email(
+                    result.value
+                ):
+                    return None
+                return result
         return None
 
     def _map_profile_preference_field(
@@ -130,13 +165,15 @@ class FillPlanService:
     ) -> FillPlanItem | None:
         rules = [
             (
-                r"\bhow\s+did\s+you\s+hear\b|\bheard\s+about\b|\bsource\b|\breferral\b",
+                r"\bhow\s+did\s+you(?:\s+\w+){0,3}\s+hear\b"
+                r"|\bheard\s+about\b|\bsource\b|\breferral\b",
                 "preferences.heard_about_opportunity",
                 "Mapped from profile opportunity-source preference.",
                 True,
             ),
             (
-                r"\bcurrent\s+company\b|\bcompany\b|\bemployer\b",
+                r"\bcurrent\s+(?:company|employer)\b"
+                r"|\b(?:company|employer)\s+name\b",
                 "preferences.company",
                 "Mapped from profile company preference.",
                 False,
@@ -145,6 +182,18 @@ class FillPlanService:
                 r"\buniversity\b|\bschool\b|\bcollege\b",
                 "preferences.university",
                 "Mapped from profile university preference.",
+                False,
+            ),
+            (
+                r"\bnon[\s-]?compete\b|\bnon[\s-]?solicitation\b",
+                "preferences.non_compete_restrictions",
+                "Mapped from saved non-compete restriction status.",
+                False,
+            ),
+            (
+                r"\bsms\b|\btext\s+message\b|\bphone[\s-]?sms[\s-]?opt[\s-]?in\b",
+                "preferences.sms_opt_in",
+                "Mapped from saved SMS notification consent.",
                 False,
             ),
         ]
@@ -164,30 +213,78 @@ class FillPlanService:
         self, field: FormField, tools: ProfileTools, label: str
     ) -> FillPlanItem | None:
         if "sponsorship" in label or "visa" in label:
+            if not self._work_authorization_country_matches(label, tools):
+                return None
             result = tools.get_profile_field("work_authorization.requires_sponsorship")
             if result:
                 return self._item(field, result, "Sensitive work authorization fact.")
-        if "authorized" in label or "authorization" in label:
+        if any(
+            phrase in label
+            for phrase in [
+                "authorized",
+                "authorization",
+                "legal right to work",
+                "eligibility to work",
+                "eligible to work",
+            ]
+        ):
+            if not self._work_authorization_country_matches(label, tools):
+                return None
             result = tools.get_profile_field("work_authorization.authorized")
             if result:
                 return self._item(field, result, "Sensitive work authorization fact.")
         return None
 
+    def _work_authorization_country_matches(
+        self, label: str, tools: ProfileTools
+    ) -> bool:
+        result = tools.get_profile_field("work_authorization.country")
+        if result is None:
+            return False
+        saved_country = self._normalize_country(result.value)
+        mentioned_country = ""
+        if re.search(r"\bcanada\b", label):
+            mentioned_country = "CA"
+        elif re.search(
+            r"\bunited\s+states(?:\s+of\s+america)?\b|\bu\.?s\.?a?\.?\b|\bh-1b\b",
+            label,
+        ):
+            mentioned_country = "US"
+        if mentioned_country:
+            return saved_country == mentioned_country
+        if "country" in label and any(
+            term in label for term in ["applying", "position", "hired", "job"]
+        ):
+            return False
+        return bool(saved_country)
+
+    def _normalize_country(self, value: str) -> str:
+        normalized = re.sub(r"[^a-z]", "", str(value).lower())
+        if normalized in {"us", "usa", "unitedstates", "unitedstatesofamerica"}:
+            return "US"
+        if normalized in {"ca", "canada"}:
+            return "CA"
+        return normalized.upper()
+
     def _map_eeo_field(
         self, field: FormField, tools: ProfileTools, label: str
     ) -> FillPlanItem | None:
+        if "gender" in label:
+            result = tools.get_profile_field("preferences.gender")
+            if result:
+                return self._item(field, result, "Exact EEO value saved in Profile.")
+        if "race" in label or "ethnicity" in label:
+            result = tools.get_profile_field("preferences.race")
+            if result:
+                return self._item(field, result, "Exact EEO value saved in Profile.")
         if "disability" in label:
             result = tools.get_profile_field("preferences.disability_status")
             if result:
-                item = self._item(field, result, "EEO profile preference; review required.")
-                item.needs_review = True
-                return item
+                return self._item(field, result, "Exact EEO value saved in Profile.")
         if "veteran" in label:
             result = tools.get_profile_field("preferences.veteran_status")
             if result:
-                item = self._item(field, result, "EEO profile preference; review required.")
-                item.needs_review = True
-                return item
+                return self._item(field, result, "Exact EEO value saved in Profile.")
         return None
 
     def _map_preference_policy_field(
@@ -212,7 +309,7 @@ class FillPlanService:
                 ),
                 blank_reason="Salary field left blank by salary policy.",
                 source_reason="Salary fact from profile preferences.",
-                review_required=not preferences.fill_sensitive_fields,
+                review_required=False,
             )
         if self._is_relocation(label):
             return self._map_policy_value(
@@ -228,7 +325,7 @@ class FillPlanService:
                 ),
                 blank_reason="Relocation field left blank by relocation policy.",
                 source_reason="Relocation fact from profile preferences.",
-                review_required=not preferences.fill_sensitive_fields,
+                review_required=False,
             )
         return None
 
@@ -278,10 +375,12 @@ class FillPlanService:
                     source_refs=[f"profile.documents.{document.id}"],
                     reason=f"Using {preferred} document from local vault.",
                 )
-        return BlockedItem(
-            field_id=field.field_id,
-            reason=f"Missing {preferred} document",
-        )
+        if not field.required:
+            return self._blank_item(
+                field,
+                f"Optional {preferred} document was not uploaded.",
+            )
+        return BlockedItem(field_id=field.field_id, reason=f"Missing {preferred} document")
 
     def _map_open_question(
         self,
@@ -398,12 +497,26 @@ class FillPlanService:
         )
 
     def _field_value(self, field: FormField, value: str) -> str | bool:
+        field_text = self._field_text(field)
+        if (
+            ("country" in field_text or "territory" in field_text)
+            and "phone" not in field_text
+            and "code" not in field_text
+        ):
+            normalized_country = self._normalize_country(value)
+            if normalized_country == "US":
+                value = "United States"
+            elif normalized_country == "CA":
+                value = "Canada"
         if field.type in {FieldType.select, FieldType.radio}:
             bool_value = self._parse_bool(value)
             if bool_value is not None:
                 option = self._bool_option(field.options, bool_value)
                 if option is not None:
                     return option
+            option = self._text_option(field.options, value)
+            if option is not None:
+                return option
         if field.type == FieldType.checkbox:
             bool_value = self._parse_bool(value)
             if bool_value is not None:
@@ -426,19 +539,47 @@ class FillPlanService:
                     return option
         return None
 
+    def _text_option(self, options: list[str], value: str) -> str | None:
+        normalized_value = " ".join(str(value).lower().split())
+        if not normalized_value:
+            return None
+        normalized_options = [
+            (option, " ".join(str(option).lower().split())) for option in options
+        ]
+        exact = [
+            option
+            for option, normalized_option in normalized_options
+            if normalized_option == normalized_value
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        prefix = [
+            option
+            for option, normalized_option in normalized_options
+            if normalized_option.startswith(normalized_value)
+            and (
+                len(normalized_option) == len(normalized_value)
+                or not normalized_option[len(normalized_value)].isalnum()
+            )
+        ]
+        return prefix[0] if len(prefix) == 1 else None
+
     def _field_text(self, field: FormField) -> str:
         return " ".join(
             [field.label, field.placeholder, field.helper_text, field.field_id]
         ).strip().lower()
 
     def _is_sensitive(self, text: str) -> bool:
-        return any(term in text for term in SENSITIVE_TERMS)
+        return any(re.search(rf"\b{re.escape(term)}\b", text) for term in SENSITIVE_TERMS)
 
     def _is_salary(self, text: str) -> bool:
         return any(term in text for term in ["salary", "compensation"])
 
     def _is_relocation(self, text: str) -> bool:
         return any(term in text for term in ["relocation", "relocate"])
+
+    def _valid_email(self, value: str) -> bool:
+        return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value.strip()))
 
     def _is_eeo(self, text: str) -> bool:
         return any(
@@ -458,6 +599,14 @@ class FillPlanService:
                 "anything else",
             ]
         )
+
+    def is_open_question(self, field: FormField) -> bool:
+        return field.type == FieldType.textarea or self._is_open_question(
+            self._field_text(field)
+        )
+
+    def open_question_type(self, field: FormField) -> str:
+        return self._classify_open_question(self._field_text(field))
 
     def _classify_open_question(self, text: str) -> str:
         if "why" in text and "role" in text:
