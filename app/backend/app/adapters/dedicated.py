@@ -45,7 +45,11 @@ class DedicatedHTMLFormExtractionService(FormExtractionService):
         self.config = config
 
     def _include_control(self, control: dict[str, Any]) -> bool:
-        if not super()._include_control(control):
+        is_listbox_button = (
+            control.get("tag") == "button"
+            and str(control.get("aria-haspopup", "")).lower() == "listbox"
+        )
+        if not is_listbox_button and not super()._include_control(control):
             return False
         identity = " ".join(
             str(control.get(key, ""))

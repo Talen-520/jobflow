@@ -23,7 +23,9 @@ class _HTMLFormParser(HTMLParser):
         if tag == "label":
             self._label_for = attr.get("for") or None
             self._label_text = []
-        elif tag in {"input", "textarea", "select"}:
+        elif tag in {"input", "textarea", "select"} or (
+            tag == "button" and attr.get("aria-haspopup", "").lower() == "listbox"
+        ):
             control = {"tag": tag, **attr, "options": []}
             if self._label_for is None and self._label_text:
                 control["nested_label"] = " ".join(self._label_text).strip()
@@ -131,7 +133,10 @@ class FormExtractionService:
     def _field_type(self, control: dict[str, Any]) -> FieldType:
         tag = control["tag"]
         input_type = control.get("type", tag).lower()
-        if control.get("role", "").lower() == "combobox":
+        if (
+            control.get("role", "").lower() == "combobox"
+            or control.get("aria-haspopup", "").lower() == "listbox"
+        ):
             return FieldType.select
         if tag == "textarea":
             return FieldType.textarea

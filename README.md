@@ -120,7 +120,7 @@ verified on July 12, 2026. Its release contract is:
 
 Verification evidence:
 
-- `84 passed` in the backend suite, plus desktop TypeScript/Vite and Rust checks.
+- `85 passed` in the backend suite, plus desktop TypeScript/Vite and Rust checks.
 - Root smoke passed across generic, Lever, Greenhouse, Ashby, Oracle, and
   Workday fixtures, including dedicated success signals and DOM fill checks.
 - Live Greenhouse, Ashby, Oracle, and Workday pages were inspected without
@@ -134,8 +134,8 @@ Verification evidence:
 
 ## Current Extension Verification
 
-- Backend suite: `84 passed`.
-- Extension JavaScript syntax checks and `25` extension tests: passed.
+- Backend suite: `85 passed`.
+- Extension JavaScript syntax checks and `26` extension tests: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
   simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.

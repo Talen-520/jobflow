@@ -141,6 +141,69 @@ def test_fill_plan_maps_plain_name_label_to_complete_identity() -> None:
     ]
 
 
+def test_fill_plan_maps_workday_identity_and_region_without_guessing_phone_type() -> None:
+    form = FormSchema(
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="legalName--firstName",
+                label="Given Name(s)*",
+                type=FieldType.text,
+                required=True,
+                selector='[name="legalName--firstName"]',
+            ),
+            FormField(
+                field_id="legalName--lastName",
+                label="Family Name*",
+                type=FieldType.text,
+                required=True,
+                selector='[name="legalName--lastName"]',
+            ),
+            FormField(
+                field_id="country",
+                label="Country / Territory",
+                type=FieldType.select,
+                required=True,
+                selector='[name="country"]',
+            ),
+            FormField(
+                field_id="countryRegion",
+                label="Region",
+                type=FieldType.select,
+                required=True,
+                selector='[name="countryRegion"]',
+            ),
+            FormField(
+                field_id="phoneType",
+                label="Phone Device Type",
+                type=FieldType.select,
+                required=False,
+                selector='[name="phoneType"]',
+            ),
+        ],
+    )
+    profile = UserProfile(
+        identity={
+            "first_name": "Tao",
+            "last_name": "Hu",
+            "state": "NY",
+            "country": "US",
+            "phone": "2125550100",
+        }
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    items = {item.field_id: item for item in plan.items}
+    assert plan.blocked_items == []
+    assert items["legalName--firstName"].value == "Tao"
+    assert items["legalName--lastName"].value == "Hu"
+    assert items["country"].value == "United States"
+    assert items["countryRegion"].value == "NY"
+    assert items["phoneType"].action == "skip"
+    assert items["phoneType"].needs_review is True
+
+
 def test_saved_work_authorization_fact_fills_without_per_run_review() -> None:
     html = Path("tests/fixtures/generic_application.html").read_text()
     form = FormExtractionService().extract_from_html(html)

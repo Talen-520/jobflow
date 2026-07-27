@@ -89,6 +89,11 @@ class FillPlanService:
                 reason="Sensitive field is missing an exact saved Profile value",
             )
 
+        if re.search(r"\bphone\s+(?:device\s+)?type\b|\bphonetype\b", label):
+            if field.required:
+                return self._missing_fact_item(field, preferences)
+            return self._optional_missing_fact_item(field, preferences)
+
         direct = self._direct_profile_mapping(label, tools)
         if direct:
             return self._item(field, direct, "Mapped from profile field.")
@@ -122,9 +127,12 @@ class FillPlanService:
             return None
 
         rules = [
-            (r"\bfirst\b.*\bname\b", "identity.first_name"),
+            (r"\b(?:first|given)\b.*\bname\b", "identity.first_name"),
             (r"\bmiddle\b.*\bname\b", "identity.middle_name"),
-            (r"\blast\b.*\bname\b", "identity.last_name"),
+            (
+                r"\b(?:last|family)\b.*\bname\b|\bsurname\b",
+                "identity.last_name",
+            ),
             (r"\bpreferred\b.*\bname\b", "identity.preferred_name"),
             (r"\bfull\b.*\bname\b", None),
             (r"^name\b", None),
@@ -132,7 +140,10 @@ class FillPlanService:
             (r"\bphone\b|\bmobile\b", "identity.phone"),
             (r"\baddress\s*(?:line)?\s*2\b|\baddress2\b", "identity.address_line2"),
             (r"\bpostal\b|\bzip(?:\s+code)?\b", "identity.postal_code"),
-            (r"\bstate\b|\bprovince\b", "identity.state"),
+            (
+                r"\bstate\b|\bprovince\b|\bcountryregion\b|\bcountry\s+region\b",
+                "identity.state",
+            ),
             (r"\bcountry\b|\bterritory\b", "identity.country"),
             (r"\blocation\b|\bcity\b", "identity.location"),
             (r"\bstreet\b|\baddress\b", "identity.address"),

@@ -139,13 +139,24 @@ test("Ashby choice buttons are idempotent when the saved option is already activ
 
 test("descriptive radio labels accept a unique saved-value prefix", () => {
   assert.equal(choiceTextMatches("Asian (Not Hispanic or Latino)", "Asian"), true);
+  assert.equal(choiceTextMatches("New York, NY, United States", "New York"), true);
   assert.equal(choiceTextMatches("Female", "Male"), false);
+  assert.equal(
+    choiceTextMatches("United States Minor Outlying Islands", "United States"),
+    false,
+  );
 });
 
 test("custom combobox values accept boolean Yes and No aliases", () => {
   assert.deepEqual(choiceValueAliases("True"), ["yes", "true"]);
   assert.deepEqual(choiceValueAliases("false"), ["no", "false"]);
   assert.deepEqual(choiceValueAliases("LinkedIn"), ["linkedin"]);
+  assert.deepEqual(choiceValueAliases("United States"), [
+    "united states",
+    "united states of america",
+    "usa",
+    "us",
+  ]);
 });
 
 test("Workday listbox buttons are retained while ordinary buttons are ignored", () => {
@@ -168,6 +179,113 @@ test("Workday listbox buttons are retained while ordinary buttons are ignored", 
 test("Workday state choices accept US postal abbreviations", () => {
   assert.deepEqual(choiceValueAliases("NY"), ["ny", "new york"]);
   assert.deepEqual(choiceValueAliases("VA"), ["va", "virginia"]);
+});
+
+test("Workday country selection ignores similarly prefixed territories", async () => {
+  let opened = false;
+  let selected = "";
+  const options = [
+    {
+      textContent: "United States Minor Outlying Islands",
+      ownerDocument: null,
+      getClientRects() {
+        return [{}];
+      },
+      closest() {
+        return null;
+      },
+      click() {
+        selected = this.textContent;
+      },
+    },
+    {
+      textContent: "United States of America",
+      ownerDocument: null,
+      getClientRects() {
+        return [{}];
+      },
+      closest() {
+        return null;
+      },
+      click() {
+        selected = this.textContent;
+      },
+    },
+  ];
+  const listbox = {
+    querySelectorAll() {
+      return opened ? options : [];
+    },
+  };
+  const country = {
+    id: "",
+    tagName: "BUTTON",
+    textContent: "Select One",
+    value: "",
+    dispatchEvent() {},
+    focus() {},
+    closest() {
+      return null;
+    },
+    getAttribute(name) {
+      return name === "aria-controls" ? "country-listbox" : "";
+    },
+    click() {
+      opened = true;
+    },
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: {
+      setTimeout,
+      getComputedStyle() {
+        return { display: "block", visibility: "visible" };
+      },
+    },
+    getElementById(id) {
+      return id === "country-listbox" ? listbox : null;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "#country") return [country];
+      return [];
+    },
+  };
+  options.forEach((option) => {
+    option.ownerDocument = documentObject;
+  });
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "country",
+          action: "select",
+          value: "United States",
+          confidence: 0.95,
+          needs_review: false,
+          source_refs: ["profile.identity.country"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "country",
+          type: "select",
+          selector: "#country",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(selected, "United States of America");
+  assert.equal(result.filled_count, 1);
+  assert.equal(result.error_count, 0);
 });
 
 test("custom combobox waits for and selects one descriptive location option", async () => {

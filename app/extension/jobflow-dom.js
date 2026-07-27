@@ -500,11 +500,9 @@
   function choiceTextMatches(actualValue, expectedValue) {
     const actual = clean(actualValue).toLowerCase();
     const expected = clean(expectedValue).toLowerCase();
-    return (
-      actual === expected ||
-      (actual.startsWith(expected) &&
-        (actual.length === expected.length || !/[a-z0-9]/i.test(actual[expected.length])))
-    );
+    if (actual === expected) return true;
+    if (!expected || !actual.startsWith(expected)) return false;
+    return /^\s*[\(\[\{,;:/-]/.test(actual.slice(expected.length));
   }
 
   function choiceValueAliases(value) {
@@ -514,6 +512,9 @@
     }
     if (["false", "no", "n", "0"].includes(normalized)) {
       return ["no", "false"];
+    }
+    if (["united states", "united states of america", "usa", "us"].includes(normalized)) {
+      return ["united states", "united states of america", "usa", "us"];
     }
     const stateName = US_STATE_NAMES[clean(value).toUpperCase()];
     if (stateName) return [normalized, stateName.toLowerCase()];
