@@ -447,6 +447,40 @@ def test_resume_upload_replaces_previous_resume_reference_and_vault_file(
     assert extension_read.headers["access-control-allow-origin"] == "*"
 
 
+def test_resume_upload_preserves_original_unicode_filename(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
+    original_name = "Tao Hu Résumé 2026.pdf"
+
+    response = client.post(
+        "/documents/upload",
+        params={
+            "kind": "resume",
+            "name": original_name,
+            "filename": original_name,
+        },
+        content=b"%PDF-1.4 unicode filename",
+        headers={"content-type": "application/pdf"},
+    )
+
+    assert response.status_code == 200
+    document = response.json()
+    assert document["name"] == original_name
+    assert Path(document["path"]).suffix == ".pdf"
+    assert not Path(document["path"]).name.endswith(".pdf.pdf")
+
+    pairing_token = client.get(
+        "/extension/status", params={"include_pairing_token": "true"}
+    ).json()["pairing_token"]
+    extension_read = client.get(
+        f"/extension/documents/{document['id']}",
+        params={"token": pairing_token},
+    )
+    assert extension_read.status_code == 200
+    assert "filename*=utf-8''Tao%20Hu%20R%C3%A9sum%C3%A9%202026.pdf" in (
+        extension_read.headers["content-disposition"]
+    )
+
+
 def test_resume_upload_rejects_unsafe_type_and_oversized_content(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "jobflow.sqlite"))
 

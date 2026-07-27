@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "r
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Database,
   FileText,
   Plug,
@@ -44,6 +45,13 @@ import {
   type ExtensionStatus,
   type RemoteAIProvider,
 } from "@/lib/api";
+import {
+  cityOptionsForCountry,
+  COUNTRY_OPTIONS,
+  normalizeCountryCode,
+  normalizeStateCode,
+  stateOptionsForCountry,
+} from "@/lib/locations";
 import { cn } from "@/lib/utils";
 
 type ModelOption = {
@@ -123,7 +131,6 @@ export function ProfilePage({
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [status, setStatus] = useState("Not loaded");
-  const [resumeName, setResumeName] = useState("Resume");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastSavedProfileRef = useRef("");
   const resumeDocument = profile.documents.find((document) => document.kind === "resume");
@@ -137,7 +144,7 @@ export function ProfilePage({
     getProfile(controller.signal)
       .then((loaded) => {
         lastSavedProfileRef.current = JSON.stringify(loaded);
-        setProfile(loaded);
+        setProfile(normalizeProfileGeography(loaded));
         setProfileLoaded(true);
         setStatus("Loaded. Changes auto-save.");
       })
@@ -181,6 +188,25 @@ export function ProfilePage({
     }));
   };
 
+  const updateCountry = (value: string) => {
+    const country = normalizeCountryCode(value);
+    setProfile((current) => {
+      const state = normalizeStateCode(current.identity.state, country);
+      const stateOptions = stateOptionsForCountry(country);
+      return {
+        ...current,
+        identity: {
+          ...current.identity,
+          country,
+          state:
+            stateOptions.length && !stateOptions.some((option) => option.value === state)
+              ? ""
+              : state,
+        },
+      };
+    });
+  };
+
   const updateLink = (key: keyof Profile["links"], value: string) => {
     setProfile((current) => ({
       ...current,
@@ -220,13 +246,12 @@ export function ProfilePage({
     try {
       const document = await uploadDocument(file, {
         kind: "resume",
-        name: resumeName.trim() || file.name,
+        name: file.name,
       });
       const updated = await getProfile();
       lastSavedProfileRef.current = JSON.stringify(updated);
       setProfile(updated);
       onProfileUpdated?.(updated);
-      setResumeName(document.name || file.name);
       setStatus("Resume replaced locally");
     } catch {
       setStatus("Resume upload failed");
@@ -323,25 +348,48 @@ export function ProfilePage({
               value={profile.identity.address_line2}
               onChange={(value) => updateIdentity("address_line2", value)}
             />
-            <ProfileInput
+            <ProfileCombobox
               label="City"
               value={profile.identity.location}
+              options={cityOptionsForCountry(profile.identity.country)}
               onChange={(value) => updateIdentity("location", value)}
             />
-            <ProfileInput
-              label="State / Province"
-              value={profile.identity.state}
-              onChange={(value) => updateIdentity("state", value)}
-            />
+            {stateOptionsForCountry(profile.identity.country).length ? (
+              <ProfileSelect
+                label="State / Province"
+                value={profile.identity.state}
+                options={[
+                  { value: "", label: "Select state / province" },
+                  ...stateOptionsForCountry(profile.identity.country),
+                ]}
+                onChange={(value) =>
+                  updateIdentity(
+                    "state",
+                    normalizeStateCode(value, profile.identity.country),
+                  )
+                }
+              />
+            ) : (
+              <ProfileCombobox
+                label="State / Province"
+                value={profile.identity.state}
+                options={[]}
+                onChange={(value) => updateIdentity("state", value)}
+              />
+            )}
             <ProfileInput
               label="Postal code"
               value={profile.identity.postal_code}
               onChange={(value) => updateIdentity("postal_code", value)}
             />
-            <ProfileInput
+            <ProfileSelect
               label="Country / Territory"
               value={profile.identity.country}
-              onChange={(value) => updateIdentity("country", value)}
+              options={[
+                { value: "", label: "Select country / territory" },
+                ...COUNTRY_OPTIONS,
+              ]}
+              onChange={updateCountry}
             />
             <ProfileInput
               label="Company"
@@ -484,6 +532,17 @@ export function ProfilePage({
               ]}
               onChange={(value) => updatePreference("veteran_status", value)}
             />
+            <div className="col-span-2 max-[760px]:col-span-1">
+              <ProfileTextarea
+                description="Add verified background, strengths, interests, and writing preferences for AI open answers. JobFlow treats this text as user-provided source material."
+                label="AI answer context"
+                maxLength={6000}
+                value={profile.ai_context ?? ""}
+                onChange={(value) =>
+                  setProfile((current) => ({ ...current, ai_context: value }))
+                }
+              />
+            </div>
           </CardContent>
         </Card>
         <div className="flex flex-col gap-8">
@@ -499,20 +558,13 @@ export function ProfilePage({
               {resumeDocument ? (
                 <div className="rounded-md border border-border p-3 text-sm">
                   <div className="font-medium">{resumeDocument.name}</div>
-                  <div className="mt-1 break-all text-xs text-muted-foreground">
-                    {resumeDocument.path}
-                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">Stored locally</div>
                 </div>
               ) : (
                 <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
                   No resume uploaded yet.
                 </div>
               )}
-              <ProfileInput
-                label="Resume name"
-                value={resumeName}
-                onChange={setResumeName}
-              />
               <Input
                 ref={fileInputRef}
                 accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
@@ -571,6 +623,28 @@ function fullNameFromProfile(profile: Profile): string {
   return [profile.identity.first_name, profile.identity.last_name]
     .filter(Boolean)
     .join(" ");
+}
+
+function normalizeProfileGeography(profile: Profile): Profile {
+  const country = normalizeCountryCode(profile.identity.country);
+  const state = normalizeStateCode(profile.identity.state, country);
+  const aiContext = profile.ai_context ?? "";
+  if (
+    aiContext === profile.ai_context &&
+    country === profile.identity.country &&
+    state === profile.identity.state
+  ) {
+    return profile;
+  }
+  return {
+    ...profile,
+    ai_context: aiContext,
+    identity: {
+      ...profile.identity,
+      country,
+      state,
+    },
+  };
 }
 
 function isValidEmail(value: string): boolean {
@@ -893,7 +967,8 @@ export function SettingsPage({ backendOnline }: { backendOnline: boolean }) {
               <CardTitle>Open Answers</CardTitle>
               <CardDescription>
                 Saved Profile fields fill directly. Only open questions use the selected
-                source-backed AI model. Final submission remains manual.
+                source-backed AI model. Personal answer context is edited in Profile.
+                Final submission remains manual.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -1227,6 +1302,69 @@ function ProfileSelect({
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function ProfileCombobox({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  const listId = `profile-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  return (
+    <label className="flex flex-col gap-2 text-sm">
+      <span className="leading-none font-medium">{label}</span>
+      <span className="relative">
+        <Input
+          className="w-full pr-10"
+          list={listId}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      </span>
+      <datalist id={listId}>
+        {options.map((option) => (
+          <option key={option} value={option} />
+        ))}
+      </datalist>
+    </label>
+  );
+}
+
+function ProfileTextarea({
+  description,
+  label,
+  maxLength,
+  value,
+  onChange,
+}: {
+  description: string;
+  label: string;
+  maxLength: number;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-2 text-sm">
+      <span className="leading-none font-medium">{label}</span>
+      <span className="text-xs leading-5 text-muted-foreground">{description}</span>
+      <textarea
+        className="min-h-36 resize-y px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        maxLength={maxLength}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <span className="self-end text-xs text-muted-foreground">
+        {value.length}/{maxLength}
+      </span>
     </label>
   );
 }

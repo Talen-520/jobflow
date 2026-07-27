@@ -84,7 +84,8 @@ class DocumentVaultService:
         return path
 
     def _vault_filename(self, document: DocumentRecord, source: Path) -> str:
-        stem = self._slug(document.name or source.stem)
+        display_name = Path(document.name).name if document.name else source.name
+        stem = self._slug(Path(display_name).stem or source.stem)
         suffix = source.suffix.lower()
         return f"{document.id}-{stem}{suffix}"
 

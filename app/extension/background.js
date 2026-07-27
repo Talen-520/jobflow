@@ -466,6 +466,23 @@ async function snapshotFrames() {
   return snapshots;
 }
 
+function filenameFromContentDisposition(disposition) {
+  const value = String(disposition || "");
+  const encoded = value.match(/filename\*\s*=\s*(?:utf-8'')?([^;]+)/i)?.[1];
+  const quoted = value.match(/filename\s*=\s*"([^"]+)"/i)?.[1];
+  const plain = value.match(/filename\s*=\s*([^;]+)/i)?.[1];
+  let filename = String(encoded || quoted || plain || "").trim().replace(/^"|"$/g, "");
+  if (encoded) {
+    try {
+      filename = decodeURIComponent(filename);
+    } catch {
+      // Keep the server-provided value if percent decoding fails.
+    }
+  }
+  filename = filename.split(/[\\/]/).at(-1)?.replace(/[\u0000-\u001f\u007f]/g, "") || "";
+  return filename || "resume.pdf";
+}
+
 async function fetchLocalDocument(url) {
   const response = await fetch(String(url), { cache: "no-store" });
   if (!response.ok) throw new Error(`Local document read failed: ${response.status}`);
@@ -479,10 +496,9 @@ async function fetchLocalDocument(url) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
   }
   const disposition = response.headers.get("content-disposition") || "";
-  const matchedName = disposition.match(/filename="?([^";]+)"?/i);
   return {
     base64: btoa(binary),
-    filename: matchedName?.[1] || "resume.pdf",
+    filename: filenameFromContentDisposition(disposition),
     type: response.headers.get("content-type") || "application/octet-stream",
   };
 }

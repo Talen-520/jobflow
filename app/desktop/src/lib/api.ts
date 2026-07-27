@@ -8,6 +8,7 @@ export type Health = {
 };
 
 export type Profile = {
+  ai_context: string;
   identity: {
     first_name: string;
     middle_name: string;
@@ -287,6 +288,7 @@ export type DataExport = {
 };
 
 export const emptyProfile: Profile = {
+  ai_context: "",
   identity: {
     first_name: "",
     middle_name: "",

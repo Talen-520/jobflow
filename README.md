@@ -23,6 +23,9 @@ is implemented and undergoing release QA:
 - Manifest V3 Chrome extension that connects automatically to the local backend,
   refreshes stale local credentials, observes supported ATS frames, and owns
   current-page fill controls.
+- Compact shadcn-style extension popup that shows only the detected ATS,
+  current field count, an optional **AI answers** switch, and one
+  **Start filling** action.
 - The extension preserves the user's normal Chrome session and automatically
   reports supported Greenhouse, Ashby, Oracle, Workday, and Lever forms. JobFlow
   does not launch a separate automation browser or reuse Chrome's profile directory.
@@ -42,10 +45,12 @@ is implemented and undergoing release QA:
 - Source-backed company, university, application-source, gender, race,
   disability, and veteran mapping from exact saved Profile fields.
 - AI use is limited to open questions such as motivation and company interest;
-  answers require validated Profile or detected-form source references.
+  answers require validated Profile or detected-form source references. A
+  dedicated auto-saved **AI answer context** field lets the user provide
+  additional verified facts and writing preferences.
 - Profile resume file upload and removal for the app-managed local resume
   reference; uploading a new resume automatically replaces the previous resume
-  record and old vault file.
+  record and old vault file while preserving the original display filename.
 - Settings screen versioned JSON export/import for migrating local profile,
   preferences, document references, and application records.
 - Settings model connection fields auto-save locally. Ollama allows manual
@@ -76,14 +81,15 @@ is implemented and undergoing release QA:
   resume state, saved application stats, current fill-plan state, and next best
   action.
 - The left sidebar is navigation-only: Dashboard, Profile, Applications, and
-  Settings. The main workspace shows detected-form status without fill actions.
+  Settings. Supported-form detection is silent in the desktop UI; concise
+  current-page status and fill actions belong to the Chrome extension.
 - Applications workspace stats, fill-plan table, and review panel are driven by
   current local app state instead of bundled sample rows or QA links.
 - Profile UI for resume upload, legal and preferred names, email, precise phone
-  fields, structured address, company, LinkedIn URL, GitHub URL, portfolio URL,
-  US work authorization, visa sponsorship, non-compete status, SMS consent,
-  university, opportunity source, gender, race, disability status, and veteran
-  status.
+  fields, normalized country and state/province dropdowns, city suggestions,
+  company, LinkedIn URL, GitHub URL, portfolio URL, US work authorization, visa
+  sponsorship, non-compete status, SMS consent, university, opportunity source,
+  gender, race, disability status, veteran status, and AI answer context.
 - Profile and Settings changes auto-save after editing; there are no page-level
   save buttons for these local preference screens.
 - Safety rules that prevent unsupported factual claims and final auto-submit.
@@ -120,7 +126,7 @@ verified on July 12, 2026. Its release contract is:
 
 Verification evidence:
 
-- `85 passed` in the backend suite, plus desktop TypeScript/Vite and Rust checks.
+- `87 passed` in the backend suite, plus desktop TypeScript/Vite and Rust checks.
 - Root smoke passed across generic, Lever, Greenhouse, Ashby, Oracle, and
   Workday fixtures, including dedicated success signals and DOM fill checks.
 - Live Greenhouse, Ashby, Oracle, and Workday pages were inspected without
@@ -134,7 +140,7 @@ Verification evidence:
 
 ## Current Extension Verification
 
-- Backend suite: `85 passed`.
+- Backend suite: `87 passed`.
 - Extension JavaScript syntax checks and `26` extension tests: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
@@ -166,7 +172,7 @@ The development extension has no build step:
 4. Start JobFlow and reload the extension once after source changes.
 5. Open a supported job application in Chrome.
 6. JobFlow detects the form and opens the extension toolbar popup with
-   **Start filling** and an optional **AI custom questions** toggle. If Chrome
+   **Start filling** and an optional **AI answers** switch. If Chrome
    declines automatic popup opening, the JobFlow icon shows a `1` badge; click
    the icon to open the same controls.
 

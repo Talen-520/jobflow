@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -289,9 +290,12 @@ def extension_document(
         path = vault.readable_document_path(document)
     except (FileNotFoundError, PermissionError) as exc:
         raise HTTPException(status_code=404, detail="Document file not found") from exc
+    download_name = Path(document.name).name if document.name else path.name
+    if not Path(download_name).suffix:
+        download_name = f"{download_name}{path.suffix}"
     return FileResponse(
         path,
-        filename=path.name,
+        filename=download_name,
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Expose-Headers": "Content-Disposition",
@@ -552,7 +556,7 @@ async def upload_document(
             content=content,
             filename=upload_filename,
             kind=kind,
-            name=upload_name or upload_filename,
+            name=upload_filename,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

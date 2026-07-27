@@ -4,6 +4,7 @@ from app.services.prompt_context import PromptContextService
 
 def test_prompt_context_preview_lists_only_saved_sources() -> None:
     profile = UserProfile(
+        ai_context="I build local AI workflow tools and prefer concise answers.",
         identity={
             "first_name": "Tao",
             "last_name": "Hu",
@@ -37,6 +38,7 @@ def test_prompt_context_preview_lists_only_saved_sources() -> None:
     preview = PromptContextService().build_preview(profile, preferences)
 
     source_refs = {source.source_ref for source in preview.sources}
+    assert "profile.ai_context" in source_refs
     assert "profile.identity.email" in source_refs
     assert "profile.work_authorization.authorized" in source_refs
     assert "profile.work_authorization.requires_sponsorship" in source_refs
@@ -48,6 +50,7 @@ def test_prompt_context_preview_lists_only_saved_sources() -> None:
     assert any("Do not invent" in rule for rule in preview.system_rules)
     assert "Final submit: manual_only" in preview.preference_summary
     assert "profile.identity.email" in preview.generated_prompt
+    assert "profile.ai_context" in preview.generated_prompt
     assert "profile.preferences.empty_note" not in preview.generated_prompt
 
 

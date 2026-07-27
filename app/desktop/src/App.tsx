@@ -176,7 +176,6 @@ function App() {
   const [profileState, setProfileState] = useState<Profile | null>(null);
   const [profileDocuments, setProfileDocuments] = useState<DocumentRecord[]>([]);
   const [eventLog, setEventLog] = useState<AutomationEvent[]>([]);
-  const [detectedFormPrompt, setDetectedFormPrompt] = useState<FormSchema | null>(null);
   const lastDetectedFormRef = useRef("");
 
   useEffect(() => {
@@ -279,7 +278,6 @@ function App() {
         setFillResult(null);
         setSuccessResult(null);
         setSuccessDraft(null);
-        setDetectedFormPrompt(inspected);
         setAutomationMessage(
           `${inspected.fields.length} fields detected on ${inspected.ats}.`,
         );
@@ -534,13 +532,6 @@ function App() {
                 </Badge>
               </div>
             </div>
-            {detectedFormPrompt ? (
-              <DetectedFormPrompt
-                form={detectedFormPrompt}
-                message={automationMessage}
-                onDismiss={() => setDetectedFormPrompt(null)}
-              />
-            ) : null}
           {selectedNav === "Dashboard" ? (
             <DashboardPage
               applications={savedApplications}
@@ -578,45 +569,6 @@ function App() {
         </section>
       </div>
     </main>
-  );
-}
-
-function DetectedFormPrompt({
-  form,
-  message,
-  onDismiss,
-}: {
-  form: FormSchema;
-  message: string;
-  onDismiss: () => void;
-}) {
-  const title = form.job_title_hint || "Job application";
-  const company = form.company_name_hint || form.ats;
-  return (
-    <section className="mb-8 flex items-center justify-between gap-6 border-y border-border py-5 max-[760px]:flex-col max-[760px]:items-stretch">
-      <div className="min-w-0">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Badge variant="success">Form detected</Badge>
-          <Badge variant="outline">{form.ats}</Badge>
-          <span className="text-sm text-muted-foreground">
-            {form.fields.length} fields
-          </span>
-        </div>
-        <h2 className="truncate text-xl font-semibold">{title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {company} · {message}
-        </p>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Start filling from the JobFlow Chrome extension. Saved Profile values fill
-          directly; CAPTCHA and final submission remain manual.
-        </p>
-      </div>
-      <div className="flex shrink-0 items-center">
-        <Button type="button" variant="ghost" onClick={onDismiss}>
-          Dismiss
-        </Button>
-      </div>
-    </section>
   );
 }
 

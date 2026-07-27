@@ -82,6 +82,19 @@ test("extension refreshes a stale token and saves only the verified token", asyn
     context,
   );
 
+  assert.equal(
+    context.filenameFromContentDisposition(
+      "attachment; filename*=utf-8''Tao%20Hu%20R%C3%A9sum%C3%A9%202026.pdf",
+    ),
+    "Tao Hu Résumé 2026.pdf",
+  );
+  assert.equal(
+    context.filenameFromContentDisposition(
+      'attachment; filename="Tao Hu Resume 2026.pdf"',
+    ),
+    "Tao Hu Resume 2026.pdf",
+  );
+
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.equal(sockets.length, 2);
@@ -109,7 +122,8 @@ test("popup owns fill controls without pairing or manual page connection", () =>
   assert.doesNotMatch(popup, /pairing-token|pairing code/i);
   assert.doesNotMatch(popup, /Use current page|Release page/);
   assert.match(popup, /Start filling/);
-  assert.match(popup, /AI custom questions/);
+  assert.match(popup, /AI answers/);
+  assert.match(popup, /CAPTCHA and submit stay manual/);
 });
 
 test("detected forms open the toolbar popup without injecting page controls", () => {

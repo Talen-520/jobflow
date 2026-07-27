@@ -100,6 +100,33 @@ def test_open_answer_can_use_detected_company_and_role_as_validated_context() ->
     ]
 
 
+def test_open_answer_can_use_saved_ai_answer_context() -> None:
+    service = OpenAnswerOrchestrator(
+        FakeGenerateClient(
+            {
+                "answer": "I enjoy building practical local AI workflow tools.",
+                "source_refs": ["profile.ai_context"],
+                "unsupported_claims": [],
+            }
+        )
+    )
+
+    draft = service.draft(
+        OpenAnswerDraftRequest(
+            question="Why are you interested in this role?",
+            question_type="motivation",
+            use_model=True,
+        ),
+        UserProfile(
+            ai_context="I enjoy building practical local AI workflow tools."
+        ),
+        Preferences(),
+    )
+
+    assert draft.fallback_used is False
+    assert draft.source_refs == ["profile.ai_context"]
+
+
 def test_open_answer_rejects_unsupported_model_sources() -> None:
     profile = UserProfile(
         experience_facts=[

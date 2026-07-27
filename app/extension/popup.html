@@ -7,27 +7,45 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <div class="mark">J</div>
-        <div>
-          <h1>JobFlow</h1>
-          <p id="status">Connecting</p>
+    <main class="popup-shell">
+      <header class="brand-row">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">J</div>
+          <div>
+            <h1>JobFlow</h1>
+            <p>Local application assistant</p>
+          </div>
         </div>
+        <span class="badge" data-state="connecting" id="status">Connecting</span>
       </header>
-      <p class="detail" id="detail">Connecting securely to the local JobFlow app.</p>
-      <section class="controls">
-        <label class="option">
-          <span>
-            <strong>AI custom questions</strong>
-            <small>Source-backed open answers only.</small>
-          </span>
-          <input id="ai-custom-fields" type="checkbox" />
-        </label>
-        <button id="start-fill" type="button" disabled>Start filling</button>
-        <p id="fill-status" class="fill-status"></p>
+
+      <section class="form-summary">
+        <div class="summary-meta">
+          <span class="badge badge-muted" id="ats-badge">No form</span>
+          <span id="field-count">0 fields</span>
+        </div>
+        <h2 id="detail-title">Checking this tab</h2>
+        <p id="detail">Connecting to the local JobFlow app.</p>
       </section>
-      <p class="boundary">This popup opens when a supported form is detected. CAPTCHA and final submission stay manual.</p>
+
+      <section class="controls">
+        <label class="switch-row">
+          <span>
+            <strong>AI answers</strong>
+            <small>Use saved Profile context for open questions.</small>
+          </span>
+          <span class="switch">
+            <input id="ai-custom-fields" type="checkbox" />
+            <span aria-hidden="true"></span>
+          </span>
+        </label>
+        <button class="button button-primary" id="start-fill" type="button" disabled>
+          Start filling
+        </button>
+        <p aria-live="polite" id="fill-status" class="fill-status"></p>
+      </section>
+
+      <footer>CAPTCHA and submit stay manual.</footer>
     </main>
     <script src="popup.js"></script>
   </body>

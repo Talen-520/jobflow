@@ -108,6 +108,7 @@ class AnswerBankSaveRequest(BaseModel):
 
 
 class UserProfile(BaseModel):
+    ai_context: str = Field(default="", max_length=6000)
     identity: Identity = Field(default_factory=Identity)
     links: Links = Field(default_factory=Links)
     work_authorization: WorkAuthorization = Field(default_factory=WorkAuthorization)
