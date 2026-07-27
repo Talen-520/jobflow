@@ -204,6 +204,162 @@ def test_fill_plan_maps_workday_identity_and_region_without_guessing_phone_type(
     assert items["phoneType"].needs_review is True
 
 
+def test_fill_plan_maps_workday_repeaters_from_structured_profile_data() -> None:
+    form = FormSchema(
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="jobflow-workday-work-experience",
+                label="Work Experience",
+                selector='[data-jobflow-workday-repeater="jobflow-workday-work-experience"]',
+            ),
+            FormField(
+                field_id="jobflow-workday-education",
+                label="Education",
+            ),
+            FormField(
+                field_id="jobflow-workday-certifications",
+                label="Certifications",
+            ),
+            FormField(
+                field_id="jobflow-workday-websites",
+                label="Websites",
+            ),
+        ],
+    )
+    profile = UserProfile(
+        links={
+            "github": "https://github.com/example",
+            "portfolio": "https://example.dev",
+        },
+        experience_facts=[
+            Fact(
+                title="Site Reliability Engineer",
+                body="Operated production services.",
+                organization="Example Inc.",
+                location="New York, NY",
+                start_date="2022-01-15",
+                end_date="",
+                current=True,
+            )
+        ],
+        education=[
+            Fact(
+                title="Queens College",
+                body="Computer Science",
+                degree="Bachelor's Degree",
+                start_date="2018-08-20",
+                end_date="2022-05-26",
+                education_status="graduated",
+            )
+        ],
+        certifications=[
+            Fact(
+                title="AWS Certified Developer",
+                credential_number="ABC-123",
+                issued_date="2024-01-15",
+                expiration_date="2027-01-15",
+            )
+        ],
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    items = {item.field_id: item for item in plan.items}
+    experience = items["jobflow-workday-work-experience"]
+    assert experience.action == "repeat"
+    assert (
+        experience.selector
+        == '[data-jobflow-workday-repeater="jobflow-workday-work-experience"]'
+    )
+    assert experience.value == [
+        {
+            "job_title": "Site Reliability Engineer",
+            "company": "Example Inc.",
+            "location": "New York, NY",
+            "current": True,
+            "start_date": "2022-01",
+            "end_date": "",
+            "description": "Operated production services.",
+        }
+    ]
+
+    education = items["jobflow-workday-education"]
+    assert education.action == "repeat"
+    assert education.value == [
+        {
+            "school": "Queens College",
+            "degree": "Bachelor's Degree",
+            "field_of_study": "Computer Science",
+            "start_date": "2018-08",
+            "end_date": "2022-05",
+            "status": "graduated",
+        }
+    ]
+
+    certifications = items["jobflow-workday-certifications"]
+    assert certifications.action == "repeat"
+    assert certifications.value == [
+        {
+            "name": "AWS Certified Developer",
+            "number": "ABC-123",
+            "issued_date": "2024-01-15",
+            "expiration_date": "2027-01-15",
+        }
+    ]
+
+    websites = items["jobflow-workday-websites"]
+    assert websites.action == "repeat"
+    assert websites.value == [
+        {"url": "https://github.com/example"},
+        {"url": "https://example.dev"},
+    ]
+
+
+def test_workday_repeat_plan_ignores_invalid_legacy_dates() -> None:
+    form = FormSchema(
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="jobflow-workday-work-experience",
+                label="Work Experience",
+                selector='[data-jobflow-workday-repeater="jobflow-workday-work-experience"]',
+            )
+        ],
+    )
+    profile = UserProfile(
+        experience_facts=[
+            Fact(
+                title="Volunteer",
+                body="Volunteer",
+                start_date="2",
+                end_date="not-a-month",
+            )
+        ]
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.items[0].value == [
+        {
+            "job_title": "Volunteer",
+            "company": "",
+            "location": "",
+            "current": False,
+            "start_date": "",
+            "end_date": "",
+            "description": "Volunteer",
+        }
+    ]
+
+
+def test_profile_fact_normalizes_legacy_month_values_for_calendar_inputs() -> None:
+    fact = Fact(start_date="2021-09", end_date="2024-02")
+
+    assert fact.start_date == "2021-09-01"
+    assert fact.end_date == "2024-02-01"
+
+
 def test_saved_work_authorization_fact_fills_without_per_run_review() -> None:
     html = Path("tests/fixtures/generic_application.html").read_text()
     form = FormExtractionService().extract_from_html(html)

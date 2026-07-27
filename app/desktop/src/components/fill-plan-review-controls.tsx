@@ -261,13 +261,18 @@ function ReviewValueInput({
 }
 
 function formatInitialValue(
-  value: string | boolean | null | undefined,
+  value:
+    | string
+    | boolean
+    | Array<Record<string, string | boolean>>
+    | null
+    | undefined,
   field: FormField | undefined,
 ): string {
   if (typeof value === "boolean") {
     return value ? "true" : "false";
   }
-  if (value) {
+  if (typeof value === "string" && value) {
     return value;
   }
   if (field?.type === "checkbox") {

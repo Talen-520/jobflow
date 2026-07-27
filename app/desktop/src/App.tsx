@@ -1727,9 +1727,19 @@ function isSafeFillCandidate(item: FillPlan["items"][number]): boolean {
   );
 }
 
-function formatPlanValue(value: string | boolean | null | undefined): string {
+function formatPlanValue(
+  value:
+    | string
+    | boolean
+    | Array<Record<string, string | boolean>>
+    | null
+    | undefined,
+): string {
   if (typeof value === "boolean") {
     return value ? "Yes" : "No";
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} saved ${value.length === 1 ? "entry" : "entries"}`;
   }
   return value || "-";
 }

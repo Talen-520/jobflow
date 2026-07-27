@@ -245,6 +245,65 @@
     );
   }
 
+  const WORKDAY_REPEATERS = [
+    {
+      fieldId: "jobflow-workday-work-experience",
+      label: "Work Experience",
+    },
+    {
+      fieldId: "jobflow-workday-education",
+      label: "Education",
+    },
+    {
+      fieldId: "jobflow-workday-certifications",
+      label: "Certifications",
+    },
+    {
+      fieldId: "jobflow-workday-websites",
+      label: "Websites",
+    },
+  ];
+
+  function workdaySectionForHeading(heading) {
+    let candidate = heading?.parentElement || null;
+    for (let depth = 0; candidate && depth < 7; depth += 1) {
+      const hasAddButton = Array.from(candidate.querySelectorAll?.("button") || []).some(
+        (button) => /^(?:add|add another)$/i.test(clean(button.textContent)),
+      );
+      if (hasAddButton) return candidate;
+      candidate = candidate.parentElement;
+    }
+    return null;
+  }
+
+  function workdayRepeaterFields(root) {
+    const headings = Array.from(
+      root.querySelectorAll?.("h1, h2, h3, h4, h5, h6, [role='heading']") || [],
+    );
+    return WORKDAY_REPEATERS.flatMap((definition) => {
+      const heading = headings.find(
+        (candidate) =>
+          clean(candidate.textContent).toLowerCase() === definition.label.toLowerCase(),
+      );
+      const section = workdaySectionForHeading(heading);
+      if (!section) return [];
+      section.setAttribute?.("data-jobflow-workday-repeater", definition.fieldId);
+      return [
+        {
+          field_id: definition.fieldId,
+          label: definition.label,
+          type: "unknown",
+          required: false,
+          options: [],
+          placeholder: "",
+          helper_text: "",
+          selector: `[data-jobflow-workday-repeater="${definition.fieldId}"]`,
+          sensitive: false,
+        },
+      ];
+    });
+  }
+
   function recordHints(documentObject, ats, url) {
     const pageTitle = clean(documentObject.title);
     const heading = clean(documentObject.querySelector("h1, h2")?.textContent);
@@ -338,6 +397,8 @@
         fields.push(field);
       }
     }
+    const workdayRepeaters =
+      ats === "workday" ? workdayRepeaterFields(root) : [];
     const controls = Array.from(
       root.querySelectorAll(
         "input, textarea, select, [role='combobox'], " +
@@ -346,6 +407,12 @@
     );
     controls.forEach((control, index) => {
       if (ignoredNativeControlType(control)) return;
+      if (
+        ats === "workday" &&
+        control.closest?.("[data-jobflow-workday-repeater]")
+      ) {
+        return;
+      }
       if (control.disabled || /captcha|honeypot|beecatcher/i.test(`${control.id} ${control.name}`)) return;
       const type = fieldType(control);
       const radioGroup =
@@ -392,6 +459,13 @@
       byId.set(fieldId, field);
       fields.push(field);
     });
+    if (ats === "workday") {
+      for (const field of workdayRepeaters) {
+        if (byId.has(field.field_id)) continue;
+        byId.set(field.field_id, field);
+        fields.push(field);
+      }
+    }
     const hints = recordHints(documentObject, ats, url);
     return {
       url,
@@ -633,7 +707,289 @@
     );
   }
 
+  function workdayRepeaterRows(section, label) {
+    const pattern = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+\\d+$`, "i");
+    const headings = Array.from(
+      section.querySelectorAll?.("h1, h2, h3, h4, h5, h6, [role='heading']") || [],
+    );
+    return headings.flatMap((heading) => {
+      if (!pattern.test(clean(heading.textContent))) return [];
+      let candidate = heading.parentElement || null;
+      for (let depth = 0; candidate && candidate !== section && depth < 6; depth += 1) {
+        const hasDelete = Array.from(candidate.querySelectorAll?.("button") || []).some(
+          (button) => /^delete$/i.test(clean(button.textContent)),
+        );
+        const hasFields = [
+          "input",
+          "textarea",
+          "select",
+          '[name="jobTitle"]',
+          '[data-automation-id="searchBox"]',
+        ].some((selector) => Boolean(candidate.querySelector?.(selector)));
+        if (hasDelete && hasFields) return [candidate];
+        candidate = candidate.parentElement;
+      }
+      return [];
+    });
+  }
+
+  function workdayAddButton(section, hasRows) {
+    const buttons = Array.from(section.querySelectorAll?.("button") || []);
+    const preferred = hasRows ? /^add another$/i : /^add$/i;
+    return (
+      buttons.find((button) => preferred.test(clean(button.textContent))) ||
+      buttons.find((button) => /^(?:add|add another)$/i.test(clean(button.textContent)))
+    );
+  }
+
+  async function waitForWorkdayRepeaterRows(
+    section,
+    label,
+    minimumCount,
+    documentObject,
+    attempts = 20,
+  ) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const rows = workdayRepeaterRows(section, label);
+      if (rows.length >= minimumCount) return rows;
+      if (attempt < attempts - 1) {
+        await waitForChoiceState(documentObject, 150);
+      }
+    }
+    return workdayRepeaterRows(section, label);
+  }
+
+  async function ensureWorkdayRepeaterRow(section, label, index, documentObject) {
+    let rows = workdayRepeaterRows(section, label);
+    while (rows.length <= index) {
+      const addButton = workdayAddButton(section, rows.length > 0);
+      if (!addButton) throw new Error(`Workday ${label} Add button was not found.`);
+      addButton.click();
+      const nextRows = await waitForWorkdayRepeaterRows(
+        section,
+        label,
+        rows.length + 1,
+        documentObject,
+      );
+      if (nextRows.length <= rows.length) {
+        throw new Error(`Workday ${label} did not add another row.`);
+      }
+      rows = nextRows;
+    }
+    return rows[index];
+  }
+
+  function setWorkdayText(control, value) {
+    const expected = clean(value);
+    if (!expected) return true;
+    if (!control) return false;
+    setNativeValue(control, expected);
+    return textValueMatches(control.value, expected);
+  }
+
+  function setWorkdayDateParts(row, startDate, endDate) {
+    const months = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionMonth-input"]') || [],
+    );
+    const years = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionYear-input"]') || [],
+    );
+    const dates = [startDate, endDate];
+    return dates.every((date, index) => {
+      if (!clean(date)) return true;
+      const [year = "", month = ""] = clean(date).split("-");
+      return (
+        setWorkdayText(months[index], month) &&
+        setWorkdayText(years[index], year)
+      );
+    });
+  }
+
+  function setWorkdayFullDateParts(row, issuedDate, expirationDate) {
+    const months = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionMonth-input"]') || [],
+    );
+    const days = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionDay-input"]') || [],
+    );
+    const years = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionYear-input"]') || [],
+    );
+    return [issuedDate, expirationDate].every((date, index) => {
+      if (!clean(date)) return true;
+      const [year = "", month = "", day = ""] = clean(date).split("-");
+      return (
+        setWorkdayText(months[index], month) &&
+        setWorkdayText(days[index], day) &&
+        setWorkdayText(years[index], year)
+      );
+    });
+  }
+
+  async function setWorkdayChoice(control, value, documentObject) {
+    const expected = clean(value);
+    if (!expected) return true;
+    if (!control) return false;
+    if (control.tagName.toLowerCase() === "select") {
+      const option = Array.from(control.options || []).find(
+        (candidate) =>
+          choiceTextMatches(candidate.value, expected) ||
+          choiceTextMatches(candidate.textContent, expected),
+      );
+      if (!option) return false;
+      control.value = option.value;
+      dispatchInput(control);
+      return control.value === option.value;
+    }
+    openChoiceMenu(control, documentObject);
+    await waitForChoiceState(documentObject);
+    const { match } = await waitForMatchingChoice(
+      documentObject,
+      control,
+      choiceValueAliases(expected),
+    );
+    if (!match) return false;
+    match.click();
+    await waitForChoiceState(documentObject);
+    return true;
+  }
+
+  async function setWorkdaySearchChoice(control, value, documentObject) {
+    const expected = clean(value);
+    if (!expected) return true;
+    if (!control) return false;
+    if (textValueMatches(control.value, expected)) return true;
+    control.focus?.();
+    setNativeValue(control, expected, false);
+    await waitForChoiceState(documentObject, 160);
+    const { match } = await waitForMatchingChoice(
+      documentObject,
+      control,
+      [expected.toLowerCase()],
+    );
+    if (!match) return false;
+    match.click();
+    await waitForChoiceState(documentObject);
+    return true;
+  }
+
+  async function applyWorkdayRepeater(item, documentObject) {
+    const definition = WORKDAY_REPEATERS.find(
+      (candidate) => candidate.fieldId === item.field_id,
+    );
+    if (!definition) throw new Error(`Unsupported Workday repeater: ${item.field_id}`);
+    const section = documentObject.querySelector(item.selector);
+    if (!section) throw new Error(`Workday ${definition.label} section was not found.`);
+    const entries = Array.isArray(item.value) ? item.value : [];
+    if (!entries.length) return true;
+
+    for (let index = 0; index < entries.length; index += 1) {
+      const row = await ensureWorkdayRepeaterRow(
+        section,
+        definition.label,
+        index,
+        documentObject,
+      );
+      if (item.field_id === "jobflow-workday-websites") {
+        const input =
+          row.querySelector?.('input[type="url"]') || row.querySelector?.("input");
+        if (!input) throw new Error("Workday Website URL field was not found.");
+        setNativeValue(input, entries[index].url || "");
+        if (!textValueMatches(input.value, entries[index].url || "")) return false;
+      } else if (item.field_id === "jobflow-workday-work-experience") {
+        const entry = entries[index];
+        const current = row.querySelector?.('[name="currentlyWorkHere"]');
+        const verified = [
+          setWorkdayText(row.querySelector?.('[name="jobTitle"]'), entry.job_title),
+          setWorkdayText(row.querySelector?.('[name="companyName"]'), entry.company),
+          setWorkdayText(row.querySelector?.('[name="location"]'), entry.location),
+          setWorkdayText(row.querySelector?.("textarea"), entry.description),
+          setWorkdayDateParts(row, entry.start_date, entry.current ? "" : entry.end_date),
+        ].every(Boolean);
+        if (!verified) return false;
+        if (current) {
+          current.checked = boolValue(entry.current);
+          dispatchInput(current);
+          if (current.checked !== boolValue(entry.current)) return false;
+        }
+      } else if (item.field_id === "jobflow-workday-education") {
+        const entry = entries[index];
+        const statusControl = [
+          '[name="educationStatus"]',
+          '[name="status"]',
+          '[data-automation-id="educationStatus"]',
+        ]
+          .map((selector) => row.querySelector?.(selector))
+          .find(Boolean);
+        const hasDateControls =
+          Array.from(
+            row.querySelectorAll?.(
+              '[data-automation-id="dateSectionMonth-input"]',
+            ) || [],
+          ).length > 0 &&
+          Array.from(
+            row.querySelectorAll?.(
+              '[data-automation-id="dateSectionYear-input"]',
+            ) || [],
+          ).length > 0;
+        const schoolVerified = await setWorkdaySearchChoice(
+          row.querySelector?.('[data-automation-id="searchBox"]'),
+          entry.school,
+          documentObject,
+        );
+        const degreeVerified = await setWorkdayChoice(
+          row.querySelector?.('[name="degree"]'),
+          entry.degree,
+          documentObject,
+        );
+        const fieldVerified = await setWorkdaySearchChoice(
+          row.querySelector?.('[id$="--fieldOfStudy"]'),
+          entry.field_of_study,
+          documentObject,
+        );
+        const datesVerified = hasDateControls
+          ? setWorkdayDateParts(row, entry.start_date, entry.end_date)
+          : true;
+        const statusVerified = statusControl
+          ? await setWorkdayChoice(statusControl, entry.status, documentObject)
+          : true;
+        if (
+          !schoolVerified ||
+          !degreeVerified ||
+          !fieldVerified ||
+          !datesVerified ||
+          !statusVerified
+        ) {
+          return false;
+        }
+      } else if (item.field_id === "jobflow-workday-certifications") {
+        const entry = entries[index];
+        const nameVerified = await setWorkdaySearchChoice(
+          row.querySelector?.('[data-automation-id="searchBox"]'),
+          entry.name,
+          documentObject,
+        );
+        const verified =
+          nameVerified &&
+          setWorkdayText(
+            row.querySelector?.('[name="certificationNumber"]'),
+            entry.number,
+          ) &&
+          setWorkdayFullDateParts(
+            row,
+            entry.issued_date,
+            entry.expiration_date,
+          );
+        if (!verified) return false;
+      }
+    }
+    return true;
+  }
+
   async function applyItem(item, field, documentObject) {
+    if (item.action === "repeat") {
+      return applyWorkdayRepeater(item, documentObject);
+    }
     const selector = item.selector || field?.selector;
     if (!selector) throw new Error("Missing selector for browser write.");
     const elements = Array.from(documentObject.querySelectorAll(selector));
@@ -797,6 +1153,7 @@
 
   const api = {
     applyFillPlan,
+    applyWorkdayRepeater,
     ashbyRadioGroup,
     captchaPresent,
     choiceButtonSelected,
@@ -810,6 +1167,7 @@
     recordHints,
     textValueMatches,
     waitForChoiceState,
+    workdayRepeaterFields,
   };
   globalObject.JobFlowDOM = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

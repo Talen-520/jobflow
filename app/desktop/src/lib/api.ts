@@ -52,6 +52,16 @@ export type Fact = {
   body: string;
   tags: string[];
   source?: string;
+  organization?: string;
+  location?: string;
+  start_date?: string;
+  end_date?: string;
+  current?: boolean;
+  degree?: string;
+  education_status?: "" | "attending" | "graduated";
+  credential_number?: string;
+  issued_date?: string;
+  expiration_date?: string;
 };
 
 export type AnswerBankEntry = {
@@ -128,8 +138,8 @@ export type FormSchema = {
 
 export type FillPlanItem = {
   field_id: string;
-  action: "fill" | "select" | "check" | "upload" | "skip";
-  value: string | boolean | null;
+  action: "fill" | "select" | "check" | "upload" | "repeat" | "skip";
+  value: string | boolean | Array<Record<string, string | boolean>> | null;
   selector: string;
   confidence: number;
   needs_review: boolean;

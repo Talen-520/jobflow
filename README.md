@@ -90,11 +90,19 @@ is implemented and undergoing release QA:
   current local app state instead of bundled sample rows or QA links.
 - Profile UI for resume upload, legal and preferred names, email, precise phone
   fields, normalized country and state/province dropdowns, state-aware city
-  suggestions with unrestricted city text entry,
+  suggestions with unrestricted city text entry and icon-triggered helper text,
   company, LinkedIn URL, GitHub URL, portfolio URL, US work authorization, visa
   sponsorship, non-compete status, SMS consent, university, opportunity source,
   gender, race, disability status, veteran status, AI answer context, and
-  optional repeatable work-experience, education, and certification facts.
+  structured repeatable work-experience, education, and certification records.
+  Work Experience captures company, location, calendar-selected dates,
+  current-role state, and description; Education captures school, degree, field
+  of study, calendar-selected dates, and attending or graduated status;
+  Certifications capture number and issue/expiration dates.
+- Legacy month-only Profile dates are normalized to a full calendar date during
+  load so an upgrade does not hide previously saved experience dates.
+- Resume status shows only `Empty` or the original filename. Add and replace use
+  one local upload control, and each new resume replaces the prior vault copy.
 - Profile and Settings changes auto-save after editing; there are no page-level
   save buttons for these local preference screens.
 - Safety rules that prevent unsupported factual claims and final auto-submit.
@@ -145,8 +153,8 @@ Verification evidence:
 
 ## Current Extension Verification
 
-- Backend suite: `87 passed`.
-- Extension JavaScript syntax checks and `27` extension tests: passed.
+- Backend suite: `89 passed`.
+- Extension JavaScript syntax checks and `36` extension tests: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
   simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.
@@ -154,12 +162,16 @@ Verification evidence:
   ten source-backed fields with zero errors and no final submission. The
   relocation/in-office commitment remained blocked because no exact Profile
   fact existed.
-- A live Workday current-page check on extension `0.6.1` uploaded the saved
-  resume and filled LinkedIn with browser verification: `2` filled, `3`
-  source-missing optional fields left manual, `0` errors, and no navigation or
-  final submission. Full multi-step Workday plus live Greenhouse and Oracle
-  checks remain required before the next distributable release is declared
-  verified.
+- Live Workday checks filled the first-step contact and address fields, then
+  uploaded the saved resume and filled LinkedIn on My Experience with browser
+  verification. Extension `0.8.3` adds native Workday Add/Add Another handling
+  for Work Experience, Education, Certifications, and Websites, including
+  polling for Workday's asynchronous row insertion and excluding each section's
+  nested controls from generic field mapping. Existing autocomplete selections
+  are verified idempotently. A live `0.8.3` Workday check filled and
+  browser-verified Work Experience, Education, and two Website rows with
+  `3` filled and `0` errors. Certifications stayed collapsed because the Profile
+  contains no certification data. The run did not navigate or submit.
 
 ## Quick Start
 

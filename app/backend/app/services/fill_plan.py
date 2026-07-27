@@ -71,6 +71,9 @@ class FillPlanService:
         self, field: FormField, tools: ProfileTools, preferences: Preferences
     ) -> FillPlanItem | BlockedItem:
         label = self._field_text(field)
+        workday_repeater = self._map_workday_repeater(field, tools, label)
+        if workday_repeater:
+            return workday_repeater
         if self._is_eeo(label):
             eeo_item = self._map_eeo_field(field, tools, label)
             if eeo_item:
@@ -111,6 +114,128 @@ class FillPlanService:
         if field.required:
             return self._missing_fact_item(field, preferences)
         return self._optional_missing_fact_item(field, preferences)
+
+    def _map_workday_repeater(
+        self, field: FormField, tools: ProfileTools, label: str
+    ) -> FillPlanItem | None:
+        if not field.field_id.startswith("jobflow-workday-"):
+            return None
+
+        profile = tools.profile
+        values: list[dict[str, object]] = []
+        source_refs: list[str] = []
+        if field.field_id == "jobflow-workday-work-experience":
+            values = [
+                {
+                    "job_title": fact.title,
+                    "company": fact.organization,
+                    "location": fact.location,
+                    "current": fact.current,
+                    "start_date": self._workday_month(fact.start_date),
+                    "end_date": self._workday_month(fact.end_date),
+                    "description": fact.body,
+                }
+                for fact in profile.experience_facts
+                if fact.title or fact.organization or fact.body
+            ]
+            source_refs = [
+                f"experience_facts.{fact.id}"
+                for fact in profile.experience_facts
+                if fact.title or fact.organization or fact.body
+            ]
+        elif field.field_id == "jobflow-workday-education":
+            values = [
+                {
+                    "school": fact.title,
+                    "degree": fact.degree,
+                    "field_of_study": fact.body,
+                    "start_date": self._workday_month(fact.start_date),
+                    "end_date": self._workday_month(fact.end_date),
+                    "status": fact.education_status,
+                }
+                for fact in profile.education
+                if (
+                    fact.title
+                    or fact.degree
+                    or fact.body
+                    or fact.start_date
+                    or fact.end_date
+                    or fact.education_status
+                )
+            ]
+            source_refs = [
+                f"education.{fact.id}"
+                for fact in profile.education
+                if (
+                    fact.title
+                    or fact.degree
+                    or fact.body
+                    or fact.start_date
+                    or fact.end_date
+                    or fact.education_status
+                )
+            ]
+        elif field.field_id == "jobflow-workday-certifications":
+            values = [
+                {
+                    "name": fact.title,
+                    "number": fact.credential_number,
+                    "issued_date": fact.issued_date,
+                    "expiration_date": fact.expiration_date,
+                }
+                for fact in profile.certifications
+                if fact.title or fact.credential_number
+            ]
+            source_refs = [
+                f"certifications.{fact.id}"
+                for fact in profile.certifications
+                if fact.title or fact.credential_number
+            ]
+        elif field.field_id == "jobflow-workday-websites":
+            values = [
+                {"url": url}
+                for url in [profile.links.github, profile.links.portfolio]
+                if url
+            ]
+            source_refs = [
+                f"profile.links.{name}"
+                for name, url in [
+                    ("github", profile.links.github),
+                    ("portfolio", profile.links.portfolio),
+                ]
+                if url
+            ]
+        else:
+            return None
+
+        if not values:
+            return FillPlanItem(
+                field_id=field.field_id,
+                action="skip",
+                selector=field.selector,
+                confidence=1.0,
+                needs_review=False,
+                source_refs=[],
+                reason=f"No saved Profile entries for {label}.",
+            )
+        return FillPlanItem(
+            field_id=field.field_id,
+            action="repeat",
+            value=values,
+            selector=field.selector,
+            confidence=0.95,
+            needs_review=False,
+            source_refs=source_refs,
+            reason=f"Mapped saved Profile entries to Workday {label}.",
+        )
+
+    def _workday_month(self, value: str) -> str:
+        normalized = str(value or "").strip()
+        match = re.fullmatch(
+            r"(\d{4}-(?:0[1-9]|1[0-2]))(?:-(?:0[1-9]|[12]\d|3[01]))?",
+            normalized,
+        )
+        return match.group(1) if match else ""
 
     def _direct_profile_mapping(
         self, label: str, tools: ProfileTools

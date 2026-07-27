@@ -1,15 +1,27 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   Database,
   FileText,
-  Plus,
   Plug,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
+import {
+  IoAdd,
+  IoCalendarOutline,
+  IoCheckmarkDoneSharp,
+  IoChevronDown,
+  IoHelpCircleOutline,
+  IoTrashOutline,
+} from "react-icons/io5";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -254,8 +266,8 @@ export function ProfilePage({
   const updateProfileFact = (
     collection: ProfileFactCollection,
     index: number,
-    key: "title" | "body",
-    value: string,
+    key: keyof Fact,
+    value: string | boolean,
   ) => {
     setProfile((current) => ({
       ...current,
@@ -590,23 +602,20 @@ export function ProfilePage({
         <div className="flex flex-col gap-8">
           <Card>
             <CardHeader>
-              <CardTitle>Resume Upload</CardTitle>
-              <CardDescription>
-                Store one local resume reference for file-upload fields. Uploading a
-                new resume automatically replaces the old one.
-              </CardDescription>
+              <CardTitle>Resume</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              {resumeDocument ? (
-                <div className="rounded-md border border-border p-3 text-sm">
-                  <div className="font-medium">{resumeDocument.name}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Stored locally</div>
-                </div>
-              ) : (
-                <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-                  No resume uploaded yet.
-                </div>
-              )}
+              <div
+                className={cn(
+                  "min-w-0 rounded-md bg-muted px-3 py-3 text-sm",
+                  resumeDocument ? "font-medium" : "text-muted-foreground",
+                )}
+                title={resumeDocument?.name}
+              >
+                <span className="block truncate">
+                  {resumeDocument?.name || "Empty"}
+                </span>
+              </div>
               <Input
                 ref={fileInputRef}
                 accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
@@ -619,7 +628,12 @@ export function ProfilePage({
                   disabled={!backendOnline}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {resumeDocument ? "Replace Resume" : "Upload Resume"}
+                  {resumeDocument ? (
+                    <IoCheckmarkDoneSharp data-icon="inline-start" />
+                  ) : (
+                    <IoAdd data-icon="inline-start" />
+                  )}
+                  {resumeDocument ? "Replace Resume" : "Add Resume"}
                 </Button>
                 <Button
                   disabled={!backendOnline || !resumeDocument}
@@ -657,22 +671,20 @@ export function ProfilePage({
           </Card>
         </div>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Optional Background</CardTitle>
-          <CardDescription>
+      <section className="pt-2">
+        <div>
+          <h2 className="text-2xl font-semibold">Optional Background</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
             Add only verified details. These entries become source material for
             matching application fields and AI answers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col divide-y divide-border">
+          </p>
+        </div>
+        <div className="mt-6 flex flex-col gap-2">
           <ProfileFactEditor
-            addLabel="Add experience"
-            bodyPlaceholder="Dates, location, responsibilities, and verified outcomes"
             emptyLabel="No work experience added."
             facts={profile.experience_facts}
+            kind="experience_facts"
             title="Work Experience"
-            titlePlaceholder="Role · Company"
             onAdd={() => addProfileFact("experience_facts")}
             onRemove={(index) => removeProfileFact("experience_facts", index)}
             onUpdate={(index, key, value) =>
@@ -680,12 +692,10 @@ export function ProfilePage({
             }
           />
           <ProfileFactEditor
-            addLabel="Add education"
-            bodyPlaceholder="Field of study, dates, and other verified details"
             emptyLabel="No education added."
             facts={profile.education}
+            kind="education"
             title="Education"
-            titlePlaceholder="Degree · School"
             onAdd={() => addProfileFact("education")}
             onRemove={(index) => removeProfileFact("education", index)}
             onUpdate={(index, key, value) =>
@@ -693,20 +703,18 @@ export function ProfilePage({
             }
           />
           <ProfileFactEditor
-            addLabel="Add certification"
-            bodyPlaceholder="Issuer, issue date, expiry date, credential ID, or URL"
             emptyLabel="No certifications added."
             facts={profile.certifications}
+            kind="certifications"
             title="Certifications"
-            titlePlaceholder="Certification name"
             onAdd={() => addProfileFact("certifications")}
             onRemove={(index) => removeProfileFact("certifications", index)}
             onUpdate={(index, key, value) =>
               updateProfileFact("certifications", index, key, value)
             }
           />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </PageShell>
   );
 }
@@ -718,6 +726,16 @@ function createProfileFact(): Fact {
     body: "",
     tags: [],
     source: "user",
+    organization: "",
+    location: "",
+    start_date: "",
+    end_date: "",
+    current: false,
+    degree: "",
+    education_status: "",
+    credential_number: "",
+    issued_date: "",
+    expiration_date: "",
   };
 }
 
@@ -1388,47 +1406,81 @@ function ProfileInput({
   );
 }
 
+function ProfileDateInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-2 text-sm">
+      <span className="leading-none font-medium">{label}</span>
+      <span className="relative">
+        <Input
+          className="w-full pr-10 [&::-webkit-calendar-picker-indicator]:opacity-0"
+          type="date"
+          value={value}
+          onClick={(event) => {
+            try {
+              event.currentTarget.showPicker?.();
+            } catch {
+              // The native date input still handles the click when showPicker is unavailable.
+            }
+          }}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <IoCalendarOutline className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      </span>
+    </label>
+  );
+}
+
 function ProfileFactEditor({
-  addLabel,
-  bodyPlaceholder,
   emptyLabel,
   facts,
+  kind,
   title,
-  titlePlaceholder,
   onAdd,
   onRemove,
   onUpdate,
 }: {
-  addLabel: string;
-  bodyPlaceholder: string;
   emptyLabel: string;
   facts: Fact[];
+  kind: ProfileFactCollection;
   title: string;
-  titlePlaceholder: string;
   onAdd: () => void;
   onRemove: (index: number) => void;
-  onUpdate: (index: number, key: "title" | "body", value: string) => void;
+  onUpdate: (
+    index: number,
+    key: keyof Fact,
+    value: string | boolean,
+  ) => void;
 }) {
   return (
-    <section className="grid min-w-0 grid-cols-[180px_minmax(0,1fr)] gap-6 py-5 first:pt-0 last:pb-0 max-[760px]:grid-cols-1 max-[760px]:gap-3">
+    <section className="grid min-w-0 grid-cols-[180px_minmax(0,1fr)] gap-6 py-5 max-[760px]:grid-cols-1 max-[760px]:gap-3">
       <div>
-        <h3 className="text-base font-semibold">{title}</h3>
-        <Button
-          className="mt-3"
-          size="sm"
-          type="button"
-          variant="outline"
-          onClick={onAdd}
-        >
-          <Plus data-icon="inline-start" />
-          {addLabel}
-        </Button>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-base font-semibold">{title}</h3>
+          <Button
+            aria-label={`Add ${title.toLowerCase()}`}
+            size="icon-sm"
+            title={`Add ${title.toLowerCase()}`}
+            type="button"
+            variant="ghost"
+            onClick={onAdd}
+          >
+            <IoAdd />
+          </Button>
+        </div>
       </div>
       <div className="flex min-w-0 flex-col gap-3">
         {facts.length ? (
           facts.map((fact, index) => (
             <div
-              className="rounded-md border border-border p-3"
+              className="rounded-md bg-muted/55 p-4"
               key={fact.id || `${title}-${index}`}
             >
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -1443,32 +1495,136 @@ function ProfileFactEditor({
                   variant="ghost"
                   onClick={() => onRemove(index)}
                 >
-                  <Trash2 />
+                  <IoTrashOutline />
                 </Button>
               </div>
-              <div className="flex flex-col gap-3">
-                <ProfileInput
-                  label="Title"
-                  placeholder={titlePlaceholder}
-                  value={fact.title}
-                  onChange={(value) => onUpdate(index, "title", value)}
-                />
-                <label className="flex flex-col gap-2 text-sm">
-                  <span className="leading-none font-medium">Details</span>
-                  <textarea
-                    className="min-h-24 resize-y px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    placeholder={bodyPlaceholder}
-                    value={fact.body}
-                    onChange={(event) =>
-                      onUpdate(index, "body", event.target.value)
+              {kind === "experience_facts" ? (
+                <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
+                  <ProfileInput
+                    label="Job title"
+                    value={fact.title}
+                    onChange={(value) => onUpdate(index, "title", value)}
+                  />
+                  <ProfileInput
+                    label="Company"
+                    value={fact.organization ?? ""}
+                    onChange={(value) => onUpdate(index, "organization", value)}
+                  />
+                  <ProfileInput
+                    label="Location"
+                    value={fact.location ?? ""}
+                    onChange={(value) => onUpdate(index, "location", value)}
+                  />
+                  <label className="flex items-end gap-3 pb-3 text-sm">
+                    <input
+                      checked={Boolean(fact.current)}
+                      className="size-4"
+                      type="checkbox"
+                      onChange={(event) =>
+                        onUpdate(index, "current", event.target.checked)
+                      }
+                    />
+                    <span className="font-medium">I currently work here</span>
+                  </label>
+                  <ProfileDateInput
+                    label="Start date"
+                    value={fact.start_date ?? ""}
+                    onChange={(value) => onUpdate(index, "start_date", value)}
+                  />
+                  <ProfileDateInput
+                    label="End date"
+                    value={fact.end_date ?? ""}
+                    onChange={(value) => onUpdate(index, "end_date", value)}
+                  />
+                  <label className="col-span-2 flex flex-col gap-2 text-sm max-[760px]:col-span-1">
+                    <span className="leading-none font-medium">Role description</span>
+                    <textarea
+                      className="min-h-24 resize-y px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      value={fact.body}
+                      onChange={(event) =>
+                        onUpdate(index, "body", event.target.value)
+                      }
+                    />
+                  </label>
+                </div>
+              ) : null}
+              {kind === "education" ? (
+                <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
+                  <ProfileInput
+                    label="School or university"
+                    value={fact.title}
+                    onChange={(value) => onUpdate(index, "title", value)}
+                  />
+                  <ProfileInput
+                    label="Degree"
+                    value={fact.degree ?? ""}
+                    onChange={(value) => onUpdate(index, "degree", value)}
+                  />
+                  <div className="col-span-2 max-[760px]:col-span-1">
+                    <ProfileInput
+                      label="Field of study"
+                      value={fact.body}
+                      onChange={(value) => onUpdate(index, "body", value)}
+                    />
+                  </div>
+                  <ProfileDateInput
+                    label="Start date"
+                    value={fact.start_date ?? ""}
+                    onChange={(value) => onUpdate(index, "start_date", value)}
+                  />
+                  <ProfileDateInput
+                    label="End date"
+                    value={fact.end_date ?? ""}
+                    onChange={(value) => onUpdate(index, "end_date", value)}
+                  />
+                  <div className="col-span-2 max-[760px]:col-span-1">
+                    <ProfileSelect
+                      label="Status"
+                      value={fact.education_status ?? ""}
+                      options={[
+                        { value: "", label: "Not set" },
+                        { value: "attending", label: "Attending" },
+                        { value: "graduated", label: "Graduated" },
+                      ]}
+                      onChange={(value) =>
+                        onUpdate(index, "education_status", value)
+                      }
+                    />
+                  </div>
+                </div>
+              ) : null}
+              {kind === "certifications" ? (
+                <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
+                  <ProfileInput
+                    label="Certification"
+                    value={fact.title}
+                    onChange={(value) => onUpdate(index, "title", value)}
+                  />
+                  <ProfileInput
+                    label="Certification number"
+                    value={fact.credential_number ?? ""}
+                    onChange={(value) =>
+                      onUpdate(index, "credential_number", value)
                     }
                   />
-                </label>
-              </div>
+                  <ProfileDateInput
+                    label="Issued date"
+                    value={fact.issued_date ?? ""}
+                    onChange={(value) => onUpdate(index, "issued_date", value)}
+                  />
+                  <ProfileDateInput
+                    label="Expiration date"
+                    value={fact.expiration_date ?? ""}
+                    onChange={(value) =>
+                      onUpdate(index, "expiration_date", value)
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
           ))
         ) : (
-          <div className="rounded-md bg-muted px-3 py-4 text-sm text-muted-foreground">
+          <div className="py-2 text-sm text-muted-foreground">
             {emptyLabel}
           </div>
         )}
@@ -1522,12 +1678,7 @@ function ProfileCombobox({
   const listId = `profile-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <label className="flex flex-col gap-2 text-sm">
-      <span className="leading-none font-medium">{label}</span>
-      {description ? (
-        <span className="text-xs leading-5 text-muted-foreground">
-          {description}
-        </span>
-      ) : null}
+      <FieldLabel description={description} label={label} />
       <span className="relative">
         <Input
           className="w-full pr-10"
@@ -1535,7 +1686,7 @@ function ProfileCombobox({
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
-        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <IoChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       </span>
       <datalist id={listId}>
         {options.map((option) => (
@@ -1561,8 +1712,7 @@ function ProfileTextarea({
 }) {
   return (
     <label className="flex flex-col gap-2 text-sm">
-      <span className="leading-none font-medium">{label}</span>
-      <span className="text-xs leading-5 text-muted-foreground">{description}</span>
+      <FieldLabel description={description} label={label} />
       <textarea
         className="min-h-36 resize-y px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
         maxLength={maxLength}
@@ -1573,6 +1723,43 @@ function ProfileTextarea({
         {value.length}/{maxLength}
       </span>
     </label>
+  );
+}
+
+function FieldLabel({
+  description,
+  label,
+}: {
+  description?: string;
+  label: string;
+}) {
+  return (
+    <span className="flex items-center gap-1.5 leading-none font-medium">
+      <span>{label}</span>
+      {description ? <HelpTooltip content={description} /> : null}
+    </span>
+  );
+}
+
+function HelpTooltip({ content }: { content: string }) {
+  const tooltipId = useId();
+  return (
+    <span
+      aria-describedby={tooltipId}
+      aria-label={content}
+      className="group relative inline-flex shrink-0 cursor-help text-muted-foreground outline-none focus-visible:text-foreground"
+      role="img"
+      tabIndex={0}
+    >
+      <IoHelpCircleOutline aria-hidden="true" className="size-4" />
+      <span
+        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-md bg-foreground px-3 py-2 text-xs font-normal leading-5 text-background opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+        id={tooltipId}
+        role="tooltip"
+      >
+        {content}
+      </span>
+    </span>
   );
 }
 
@@ -1645,9 +1832,14 @@ function formatNullableBoolean(value: boolean | null): string {
   return value ? "Yes" : "No";
 }
 
-function formatPlanValue(value: string | boolean | null): string {
+function formatPlanValue(
+  value: string | boolean | Array<Record<string, string | boolean>> | null,
+): string {
   if (typeof value === "boolean") {
     return value ? "Yes" : "No";
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} saved ${value.length === 1 ? "entry" : "entries"}`;
   }
   return value || "-";
 }

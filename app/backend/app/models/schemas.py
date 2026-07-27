@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
@@ -59,6 +60,24 @@ class Fact(BaseModel):
     body: str = ""
     tags: list[str] = Field(default_factory=list)
     source: str = "user"
+    organization: str = ""
+    location: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    current: bool = False
+    degree: str = ""
+    education_status: Literal["", "attending", "graduated"] = ""
+    credential_number: str = ""
+    issued_date: str = ""
+    expiration_date: str = ""
+
+    @field_validator("start_date", "end_date", mode="before")
+    @classmethod
+    def normalize_legacy_month_date(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if re.fullmatch(r"\d{4}-(?:0[1-9]|1[0-2])", normalized):
+            return f"{normalized}-01"
+        return normalized
 
 
 class DocumentRecord(BaseModel):
@@ -190,8 +209,8 @@ class FormSchema(BaseModel):
 
 class FillPlanItem(BaseModel):
     field_id: str
-    action: Literal["fill", "select", "check", "upload", "skip"] = "fill"
-    value: str | bool | None = ""
+    action: Literal["fill", "select", "check", "upload", "repeat", "skip"] = "fill"
+    value: str | bool | list[dict[str, Any]] | None = ""
     selector: str = ""
     confidence: float = 0.0
     needs_review: bool = False

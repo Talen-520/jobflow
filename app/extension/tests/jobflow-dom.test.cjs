@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   applyFillPlan,
+  applyWorkdayRepeater,
   captchaPresent,
   choiceButtonSelected,
   choiceTextMatches,
@@ -10,10 +11,12 @@ const {
   ashbyRadioGroup,
   decodeDocumentPayload,
   eligiblePlanItems,
+  extractForm,
   ignoredNativeControlType,
   recordHints,
   textValueMatches,
   waitForChoiceState,
+  workdayRepeaterFields,
 } = require("../jobflow-dom.js");
 
 test("Ashby radios use the stable question path and all option labels", () => {
@@ -811,4 +814,708 @@ test("Workday uses the page title when the application heading is generic", () =
 
   assert.equal(hints.company, "Workday");
   assert.equal(hints.jobTitle, "Sr Site Reliability Engineer (US Federal)");
+});
+
+test("Workday reports collapsed Add sections as repeatable fields", () => {
+  const headings = [
+    "Work Experience",
+    "Education",
+    "Certifications",
+    "Websites",
+  ].map((textContent) => {
+    const button = { textContent: "Add" };
+    const section = {
+      querySelectorAll(selector) {
+        return selector === "button" ? [button] : [];
+      },
+      setAttribute() {},
+    };
+    return {
+      textContent,
+      parentElement: section,
+    };
+  });
+  const root = {
+    querySelectorAll(selector) {
+      return selector.includes("[role='heading']") ? headings : [];
+    },
+  };
+
+  assert.deepEqual(
+    workdayRepeaterFields(root).map((field) => ({
+      field_id: field.field_id,
+      label: field.label,
+    })),
+    [
+      {
+        field_id: "jobflow-workday-work-experience",
+        label: "Work Experience",
+      },
+      {
+        field_id: "jobflow-workday-education",
+        label: "Education",
+      },
+      {
+        field_id: "jobflow-workday-certifications",
+        label: "Certifications",
+      },
+      {
+        field_id: "jobflow-workday-websites",
+        label: "Websites",
+      },
+    ],
+  );
+});
+
+test("Workday extraction leaves repeater controls to the structured field", () => {
+  const attributes = {};
+  const section = {
+    setAttribute(name, value) {
+      attributes[name] = value;
+    },
+    querySelectorAll(selector) {
+      return selector === "button" ? [{ textContent: "Add" }] : [];
+    },
+  };
+  const heading = {
+    textContent: "Work Experience",
+    parentElement: section,
+  };
+  const container = {
+    querySelector() {
+      return { textContent: "Location" };
+    },
+  };
+  const control = {
+    tagName: "INPUT",
+    disabled: false,
+    id: "",
+    name: "location",
+    required: false,
+    getAttribute(name) {
+      return { name: "location", type: "text" }[name] || "";
+    },
+    querySelectorAll() {
+      return [];
+    },
+    closest(selector) {
+      return selector === "[data-jobflow-workday-repeater]"
+        ? attributes["data-jobflow-workday-repeater"]
+          ? section
+          : null
+        : container;
+    },
+  };
+  const root = {
+    querySelectorAll(selector) {
+      if (selector.includes("[role='heading']")) return [heading];
+      if (selector.startsWith("input, textarea")) return [control];
+      return [];
+    },
+  };
+  const documentObject = {
+    title: "Example Role",
+    documentElement: { innerHTML: "myworkdayjobs.com" },
+    querySelector(selector) {
+      if (selector.includes("applyFlowPage")) return root;
+      if (selector === "h1, h2") return { textContent: "Careers at Workday" };
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const form = extractForm(
+    documentObject,
+    "https://example.myworkdayjobs.com/en-US/Example/job/role/apply",
+  );
+
+  assert.deepEqual(
+    form.fields.map((field) => field.field_id),
+    ["jobflow-workday-work-experience"],
+  );
+});
+
+test("Workday repeat action adds and fills every saved website", async () => {
+  const rows = [];
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [addButton];
+      if (selector.includes("[role='heading']")) {
+        return rows.map((row, index) => ({
+          textContent: `Websites ${index + 1}`,
+          parentElement: row,
+        }));
+      }
+      return [];
+    },
+  };
+  const addButton = {
+    textContent: "Add",
+    click() {
+      const input = {
+        tagName: "INPUT",
+        value: "",
+        getAttribute() {
+          return "";
+        },
+        dispatchEvent() {},
+      };
+      const row = {
+        websiteInput: input,
+        parentElement: section,
+        querySelector(selector) {
+          return selector === "input" ? input : null;
+        },
+        querySelectorAll(selector) {
+          if (selector === "button") return [{ textContent: "Delete" }];
+          if (selector === "input") return [input];
+          return [];
+        },
+      };
+      rows.push(row);
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector(selector) {
+      return selector ===
+        '[data-jobflow-workday-repeater="jobflow-workday-websites"]'
+        ? section
+        : null;
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-websites",
+      selector:
+        '[data-jobflow-workday-repeater="jobflow-workday-websites"]',
+      value: [
+        { url: "https://github.com/example" },
+        { url: "https://example.dev" },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.deepEqual(
+    rows.map((row) => row.websiteInput.value),
+    ["https://github.com/example", "https://example.dev"],
+  );
+});
+
+test("Workday repeat action waits for an asynchronously added row", async () => {
+  const rows = [];
+  const input = {
+    tagName: "INPUT",
+    value: "",
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+  };
+  const row = {
+    parentElement: null,
+    querySelector(selector) {
+      return selector === "input" ? input : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "button") return [{ textContent: "Delete" }];
+      if (selector === "input") return [input];
+      return [];
+    },
+  };
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [addButton];
+      if (selector.includes("[role='heading']")) {
+        return rows.map((entry, index) => ({
+          textContent: `Websites ${index + 1}`,
+          parentElement: entry,
+        }));
+      }
+      return [];
+    },
+  };
+  row.parentElement = section;
+  const addButton = {
+    textContent: "Add",
+    click() {
+      setTimeout(() => rows.push(row), 250);
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-websites",
+      selector:
+        '[data-jobflow-workday-repeater="jobflow-workday-websites"]',
+      value: [{ url: "https://example.dev" }],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(input.value, "https://example.dev");
+});
+
+test("Workday repeat action resolves controls outside the row heading", async () => {
+  const input = {
+    tagName: "INPUT",
+    value: "",
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+  };
+  const row = {
+    parentElement: null,
+    querySelector(selector) {
+      return selector === "input" ? input : null;
+    },
+    querySelectorAll(selector) {
+      return selector === "button" ? [{ textContent: "Delete" }] : [];
+    },
+  };
+  const headingBar = {
+    parentElement: row,
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === "button" ? [{ textContent: "Delete" }] : [];
+    },
+  };
+  const section = {
+    querySelectorAll(selector) {
+      if (selector.includes("[role='heading']")) {
+        return [{ textContent: "Websites 1", parentElement: headingBar }];
+      }
+      return [];
+    },
+  };
+  row.parentElement = section;
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-websites",
+      selector:
+        '[data-jobflow-workday-repeater="jobflow-workday-websites"]',
+      value: [{ url: "https://example.dev" }],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(input.value, "https://example.dev");
+});
+
+test("Workday repeat action fills a structured work experience row", async () => {
+  const makeInput = () => ({
+    tagName: "INPUT",
+    value: "",
+    checked: false,
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+  });
+  const controls = {
+    jobTitle: makeInput(),
+    companyName: makeInput(),
+    location: makeInput(),
+    current: makeInput(),
+    description: { ...makeInput(), tagName: "TEXTAREA" },
+    months: [makeInput(), makeInput()],
+    years: [makeInput(), makeInput()],
+  };
+  let row = null;
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [addButton];
+      if (selector.includes("[role='heading']") && row) {
+        return [{ textContent: "Work Experience 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  const addButton = {
+    textContent: "Add",
+    click() {
+      row = {
+        parentElement: section,
+        querySelector(selector) {
+          return {
+            '[name="jobTitle"]': controls.jobTitle,
+            '[name="companyName"]': controls.companyName,
+            '[name="location"]': controls.location,
+            '[name="currentlyWorkHere"]': controls.current,
+            textarea: controls.description,
+          }[selector] || null;
+        },
+        querySelectorAll(selector) {
+          if (selector === "button") return [{ textContent: "Delete" }];
+          if (selector === '[data-automation-id="dateSectionMonth-input"]') {
+            return controls.months;
+          }
+          if (selector === '[data-automation-id="dateSectionYear-input"]') {
+            return controls.years;
+          }
+          return [];
+        },
+      };
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-work-experience",
+      selector:
+        '[data-jobflow-workday-repeater="jobflow-workday-work-experience"]',
+      value: [
+        {
+          job_title: "Site Reliability Engineer",
+          company: "Example Inc.",
+          location: "New York, NY",
+          current: false,
+          start_date: "2022-01",
+          end_date: "2024-06",
+          description: "Operated production services.",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(controls.jobTitle.value, "Site Reliability Engineer");
+  assert.equal(controls.companyName.value, "Example Inc.");
+  assert.equal(controls.location.value, "New York, NY");
+  assert.equal(controls.current.checked, false);
+  assert.deepEqual(controls.months.map((control) => control.value), ["01", "06"]);
+  assert.deepEqual(controls.years.map((control) => control.value), ["2022", "2024"]);
+  assert.equal(controls.description.value, "Operated production services.");
+});
+
+test("Workday repeat action selects structured education values", async () => {
+  const makeInput = () => ({
+    tagName: "INPUT",
+    value: "",
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+    focus() {},
+  });
+  const school = makeInput();
+  const fieldOfStudy = makeInput();
+  const months = [makeInput(), makeInput()];
+  const years = [makeInput(), makeInput()];
+  const degree = {
+    tagName: "SELECT",
+    value: "",
+    options: [
+      { value: "", textContent: "Select One" },
+      { value: "bachelors", textContent: "Bachelor's Degree" },
+    ],
+    dispatchEvent() {},
+  };
+  const educationStatus = {
+    tagName: "SELECT",
+    value: "",
+    options: [
+      { value: "", textContent: "Select One" },
+      { value: "attending", textContent: "Attending" },
+      { value: "graduated", textContent: "Graduated" },
+    ],
+    dispatchEvent() {},
+  };
+  const options = [
+    {
+      textContent: "Queens College",
+      ownerDocument: null,
+      getClientRects() {
+        return [{}];
+      },
+      closest() {
+        return null;
+      },
+      click() {
+        school.value = this.textContent;
+      },
+    },
+    {
+      textContent: "Computer Science",
+      ownerDocument: null,
+      getClientRects() {
+        return [{}];
+      },
+      closest() {
+        return null;
+      },
+      click() {
+        fieldOfStudy.value = this.textContent;
+      },
+    },
+  ];
+  let row = null;
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [addButton];
+      if (selector.includes("[role='heading']") && row) {
+        return [{ textContent: "Education 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  const addButton = {
+    textContent: "Add",
+    click() {
+      row = {
+        parentElement: section,
+        querySelector(selector) {
+          return {
+            '[data-automation-id="searchBox"]': school,
+            '[name="degree"]': degree,
+            '[id$="--fieldOfStudy"]': fieldOfStudy,
+            '[name="educationStatus"]': educationStatus,
+          }[selector] || null;
+        },
+        querySelectorAll(selector) {
+          if (selector === '[data-automation-id="dateSectionMonth-input"]') {
+            return months;
+          }
+          if (selector === '[data-automation-id="dateSectionYear-input"]') {
+            return years;
+          }
+          return selector === "button" ? [{ textContent: "Delete" }] : [];
+        },
+      };
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+    querySelectorAll(selector) {
+      return selector.includes('[role="option"]') ? options : [];
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-education",
+      selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+      value: [
+        {
+          school: "Queens College",
+          degree: "Bachelor's Degree",
+          field_of_study: "Computer Science",
+          start_date: "2018-08",
+          end_date: "2022-05",
+          status: "graduated",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(school.value, "Queens College");
+  assert.equal(degree.value, "bachelors");
+  assert.equal(fieldOfStudy.value, "Computer Science");
+  assert.deepEqual(months.map((control) => control.value), ["08", "05"]);
+  assert.deepEqual(years.map((control) => control.value), ["2018", "2022"]);
+  assert.equal(educationStatus.value, "graduated");
+});
+
+test("Workday repeat action keeps already selected education values", async () => {
+  const school = {
+    tagName: "INPUT",
+    value: "Queens College",
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+    focus() {},
+  };
+  const fieldOfStudy = {
+    ...school,
+    value: "Computer Science",
+  };
+  const row = {
+    parentElement: null,
+    querySelector(selector) {
+      return {
+        '[data-automation-id="searchBox"]': school,
+        '[id$="--fieldOfStudy"]': fieldOfStudy,
+      }[selector] || null;
+    },
+    querySelectorAll(selector) {
+      return selector === "button" ? [{ textContent: "Delete" }] : [];
+    },
+  };
+  const section = {
+    querySelectorAll(selector) {
+      if (selector.includes("[role='heading']")) {
+        return [{ textContent: "Education 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  row.parentElement = section;
+  const documentObject = {
+    defaultView: {
+      setTimeout(callback) {
+        callback();
+      },
+    },
+    querySelector() {
+      return section;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-education",
+      selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+      value: [
+        {
+          school: "Queens College",
+          degree: "",
+          field_of_study: "Computer Science",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(school.value, "Queens College");
+  assert.equal(fieldOfStudy.value, "Computer Science");
+});
+
+test("Workday repeat action fills a structured certification row", async () => {
+  const makeInput = () => ({
+    tagName: "INPUT",
+    value: "",
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+    focus() {},
+  });
+  const name = makeInput();
+  const number = makeInput();
+  const months = [makeInput(), makeInput()];
+  const days = [makeInput(), makeInput()];
+  const years = [makeInput(), makeInput()];
+  const option = {
+    textContent: "AWS Certified Developer",
+    ownerDocument: null,
+    getClientRects() {
+      return [{}];
+    },
+    closest() {
+      return null;
+    },
+    click() {
+      name.value = this.textContent;
+    },
+  };
+  let row = null;
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [addButton];
+      if (selector.includes("[role='heading']") && row) {
+        return [{ textContent: "Certifications 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  const addButton = {
+    textContent: "Add",
+    click() {
+      row = {
+        parentElement: section,
+        querySelector(selector) {
+          return {
+            '[data-automation-id="searchBox"]': name,
+            '[name="certificationNumber"]': number,
+          }[selector] || null;
+        },
+        querySelectorAll(selector) {
+          if (selector === "button") return [{ textContent: "Delete" }];
+          if (selector === '[data-automation-id="dateSectionMonth-input"]') {
+            return months;
+          }
+          if (selector === '[data-automation-id="dateSectionDay-input"]') {
+            return days;
+          }
+          if (selector === '[data-automation-id="dateSectionYear-input"]') {
+            return years;
+          }
+          return [];
+        },
+      };
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+    querySelectorAll(selector) {
+      return selector.includes('[role="option"]') ? [option] : [];
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-certifications",
+      selector:
+        '[data-jobflow-workday-repeater="jobflow-workday-certifications"]',
+      value: [
+        {
+          name: "AWS Certified Developer",
+          number: "ABC-123",
+          issued_date: "2024-01-15",
+          expiration_date: "2027-06-30",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(name.value, "AWS Certified Developer");
+  assert.equal(number.value, "ABC-123");
+  assert.deepEqual(months.map((control) => control.value), ["01", "06"]);
+  assert.deepEqual(days.map((control) => control.value), ["15", "30"]);
+  assert.deepEqual(years.map((control) => control.value), ["2024", "2027"]);
 });
