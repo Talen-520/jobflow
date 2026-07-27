@@ -88,69 +88,72 @@ const CANADIAN_PROVINCES: Array<[string, string]> = [
   ["YT", "Yukon"],
 ];
 
-const US_CITIES = [
-  "New York",
-  "Los Angeles",
-  "Chicago",
-  "Houston",
-  "Phoenix",
-  "Philadelphia",
-  "San Antonio",
-  "San Diego",
-  "Dallas",
-  "San Jose",
-  "Austin",
-  "Jacksonville",
-  "Fort Worth",
-  "Columbus",
-  "Charlotte",
-  "Indianapolis",
-  "Seattle",
-  "Denver",
-  "Washington",
-  "Boston",
-  "Nashville",
-  "Detroit",
-  "Portland",
-  "Las Vegas",
-  "Baltimore",
-  "Milwaukee",
-  "Atlanta",
-  "Miami",
-  "Raleigh",
-  "Minneapolis",
-  "Tampa",
-  "Cleveland",
-  "Pittsburgh",
-  "Richmond",
-  "Salt Lake City",
-  "Orlando",
-  "Sacramento",
-  "San Francisco",
-  "Kansas City",
-  "St. Louis",
-  "Cincinnati",
-  "Buffalo",
-  "Rochester",
-  "Jersey City",
-  "Newark",
-];
-
-const CANADIAN_CITIES = [
-  "Toronto",
-  "Montreal",
-  "Vancouver",
-  "Calgary",
-  "Edmonton",
-  "Ottawa",
-  "Winnipeg",
-  "Quebec City",
-  "Hamilton",
-  "Halifax",
-  "Victoria",
-  "Saskatoon",
-  "Regina",
-];
+const CITY_SUGGESTIONS_BY_REGION: Record<string, string[]> = {
+  "US-AL": ["Montgomery", "Birmingham", "Huntsville", "Mobile"],
+  "US-AK": ["Juneau", "Anchorage", "Fairbanks"],
+  "US-AZ": ["Phoenix", "Tucson", "Mesa", "Scottsdale", "Tempe"],
+  "US-AR": ["Little Rock", "Fayetteville", "Fort Smith"],
+  "US-CA": ["Sacramento", "Los Angeles", "San Diego", "San Francisco", "San Jose", "Oakland", "Irvine"],
+  "US-CO": ["Denver", "Colorado Springs", "Boulder", "Fort Collins"],
+  "US-CT": ["Hartford", "Bridgeport", "New Haven", "Stamford"],
+  "US-DE": ["Dover", "Wilmington", "Newark"],
+  "US-DC": ["Washington"],
+  "US-FL": ["Tallahassee", "Jacksonville", "Miami", "Tampa", "Orlando"],
+  "US-GA": ["Atlanta", "Savannah", "Augusta"],
+  "US-HI": ["Honolulu", "Hilo"],
+  "US-ID": ["Boise", "Idaho Falls", "Coeur d'Alene"],
+  "US-IL": ["Springfield", "Chicago", "Rockford"],
+  "US-IN": ["Indianapolis", "Fort Wayne", "Bloomington"],
+  "US-IA": ["Des Moines", "Cedar Rapids", "Iowa City"],
+  "US-KS": ["Topeka", "Wichita", "Overland Park"],
+  "US-KY": ["Frankfort", "Louisville", "Lexington"],
+  "US-LA": ["Baton Rouge", "New Orleans", "Shreveport"],
+  "US-ME": ["Augusta", "Portland", "Bangor"],
+  "US-MD": ["Annapolis", "Baltimore", "Rockville", "Silver Spring"],
+  "US-MA": ["Boston", "Worcester", "Cambridge", "Springfield"],
+  "US-MI": ["Lansing", "Detroit", "Ann Arbor", "Grand Rapids"],
+  "US-MN": ["Saint Paul", "Minneapolis", "Rochester", "Duluth"],
+  "US-MS": ["Jackson", "Gulfport", "Hattiesburg"],
+  "US-MO": ["Jefferson City", "Kansas City", "St. Louis", "Springfield"],
+  "US-MT": ["Helena", "Billings", "Missoula", "Bozeman"],
+  "US-NE": ["Lincoln", "Omaha", "Bellevue"],
+  "US-NV": ["Carson City", "Las Vegas", "Reno", "Henderson"],
+  "US-NH": ["Concord", "Manchester", "Nashua"],
+  "US-NJ": ["Trenton", "Newark", "Jersey City", "Princeton"],
+  "US-NM": ["Santa Fe", "Albuquerque", "Las Cruces"],
+  "US-NY": ["Albany", "New York", "Buffalo", "Rochester", "Syracuse", "Yonkers"],
+  "US-NC": ["Raleigh", "Charlotte", "Durham", "Greensboro"],
+  "US-ND": ["Bismarck", "Fargo", "Grand Forks"],
+  "US-OH": ["Columbus", "Cleveland", "Cincinnati", "Dayton"],
+  "US-OK": ["Oklahoma City", "Tulsa", "Norman"],
+  "US-OR": ["Salem", "Portland", "Eugene", "Bend"],
+  "US-PA": ["Harrisburg", "Philadelphia", "Pittsburgh", "Allentown"],
+  "US-RI": ["Providence", "Warwick", "Newport"],
+  "US-SC": ["Columbia", "Charleston", "Greenville"],
+  "US-SD": ["Pierre", "Sioux Falls", "Rapid City"],
+  "US-TN": ["Nashville", "Memphis", "Knoxville", "Chattanooga"],
+  "US-TX": ["Austin", "Houston", "Dallas", "San Antonio", "Fort Worth"],
+  "US-UT": ["Salt Lake City", "Provo", "Ogden"],
+  "US-VT": ["Montpelier", "Burlington", "Rutland"],
+  "US-VA": ["Richmond", "Virginia Beach", "Norfolk", "Arlington", "Reston", "Alexandria"],
+  "US-WA": ["Olympia", "Seattle", "Spokane", "Tacoma", "Bellevue"],
+  "US-WV": ["Charleston", "Morgantown", "Huntington"],
+  "US-WI": ["Madison", "Milwaukee", "Green Bay"],
+  "US-WY": ["Cheyenne", "Casper", "Laramie"],
+  "CA-AB": ["Edmonton", "Calgary", "Red Deer"],
+  "CA-BC": ["Victoria", "Vancouver", "Surrey"],
+  "CA-MB": ["Winnipeg", "Brandon"],
+  "CA-NB": ["Fredericton", "Moncton", "Saint John"],
+  "CA-NL": ["St. John's", "Corner Brook"],
+  "CA-NS": ["Halifax", "Sydney"],
+  "CA-NT": ["Yellowknife"],
+  "CA-NU": ["Iqaluit"],
+  "CA-ON": ["Toronto", "Ottawa", "Hamilton", "Waterloo"],
+  "CA-PE": ["Charlottetown", "Summerside"],
+  "CA-QC": ["Quebec City", "Montreal", "Laval"],
+  "CA-SK": ["Regina", "Saskatoon"],
+  "CA-YT": ["Whitehorse"],
+};
 
 const displayNames =
   typeof Intl.DisplayNames === "function"
@@ -202,9 +205,17 @@ export function normalizeStateCode(value: string, country: string): string {
   return match?.value || normalized;
 }
 
-export function cityOptionsForCountry(country: string): string[] {
+export function cityOptionsForCountry(country: string, state = ""): string[] {
   const normalizedCountry = normalizeCountryCode(country);
-  if (normalizedCountry === "US") return US_CITIES;
-  if (normalizedCountry === "CA") return CANADIAN_CITIES;
-  return [];
+  const normalizedState = normalizeStateCode(state, normalizedCountry);
+  const regional = CITY_SUGGESTIONS_BY_REGION[`${normalizedCountry}-${normalizedState}`];
+  if (regional) return regional;
+  if (!["US", "CA"].includes(normalizedCountry)) return [];
+  return Array.from(
+    new Set(
+      Object.entries(CITY_SUGGESTIONS_BY_REGION)
+        .filter(([key]) => key.startsWith(`${normalizedCountry}-`))
+        .flatMap(([, cities]) => cities),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
 }

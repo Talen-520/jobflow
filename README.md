@@ -26,6 +26,9 @@ is implemented and undergoing release QA:
 - Compact shadcn-style extension popup that shows only the detected ATS,
   current field count, an optional **AI answers** switch, and one
   **Start filling** action.
+- Extension completion feedback that reports how many detected fields still
+  need manual input. A double-check completion icon appears only when every
+  detected field on the current page is filled and browser-verified.
 - The extension preserves the user's normal Chrome session and automatically
   reports supported Greenhouse, Ashby, Oracle, Workday, and Lever forms. JobFlow
   does not launch a separate automation browser or reuse Chrome's profile directory.
@@ -86,10 +89,12 @@ is implemented and undergoing release QA:
 - Applications workspace stats, fill-plan table, and review panel are driven by
   current local app state instead of bundled sample rows or QA links.
 - Profile UI for resume upload, legal and preferred names, email, precise phone
-  fields, normalized country and state/province dropdowns, city suggestions,
+  fields, normalized country and state/province dropdowns, state-aware city
+  suggestions with unrestricted city text entry,
   company, LinkedIn URL, GitHub URL, portfolio URL, US work authorization, visa
   sponsorship, non-compete status, SMS consent, university, opportunity source,
-  gender, race, disability status, veteran status, and AI answer context.
+  gender, race, disability status, veteran status, AI answer context, and
+  optional repeatable work-experience, education, and certification facts.
 - Profile and Settings changes auto-save after editing; there are no page-level
   save buttons for these local preference screens.
 - Safety rules that prevent unsupported factual claims and final auto-submit.
@@ -141,16 +146,20 @@ Verification evidence:
 ## Current Extension Verification
 
 - Backend suite: `87 passed`.
-- Extension JavaScript syntax checks and `26` extension tests: passed.
+- Extension JavaScript syntax checks and `27` extension tests: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
   simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.
 - A live Avoca/Ashby production check on extension `0.4.3` filled and verified
   ten source-backed fields with zero errors and no final submission. The
   relocation/in-office commitment remained blocked because no exact Profile
-  fact existed. Live
-  Greenhouse, Oracle, and Workday checks remain required before the next
-  distributable release is declared verified.
+  fact existed.
+- A live Workday current-page check on extension `0.6.1` uploaded the saved
+  resume and filled LinkedIn with browser verification: `2` filled, `3`
+  source-missing optional fields left manual, `0` errors, and no navigation or
+  final submission. Full multi-step Workday plus live Greenhouse and Oracle
+  checks remain required before the next distributable release is declared
+  verified.
 
 ## Quick Start
 

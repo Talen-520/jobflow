@@ -5,8 +5,10 @@ import {
   ChevronDown,
   Database,
   FileText,
+  Plus,
   Plug,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +31,7 @@ import {
   exportData,
   type FillPlan,
   type FillResult,
+  type Fact,
   type FormSchema,
   getPreferences,
   getCredentialStatus,
@@ -58,6 +61,8 @@ type ModelOption = {
   value: string;
   label: string;
 };
+
+type ProfileFactCollection = "experience_facts" | "education" | "certifications";
 
 const AI_PROVIDER_OPTIONS: Array<{
   value: Preferences["ai_provider"];
@@ -170,9 +175,10 @@ export function ProfilePage({
     const timeout = window.setTimeout(() => {
       void putProfile(profile)
         .then((saved) => {
-          lastSavedProfileRef.current = JSON.stringify(saved);
-          setProfile(saved);
-          onProfileUpdated?.(saved);
+          const normalized = normalizeProfileGeography(saved);
+          lastSavedProfileRef.current = JSON.stringify(normalized);
+          setProfile(normalized);
+          onProfileUpdated?.(normalized);
           setStatus("Saved locally");
         })
         .catch(() => setStatus("Auto-save failed. Backend unavailable."));
@@ -238,6 +244,36 @@ export function ProfilePage({
     }));
   };
 
+  const addProfileFact = (collection: ProfileFactCollection) => {
+    setProfile((current) => ({
+      ...current,
+      [collection]: [...current[collection], createProfileFact()],
+    }));
+  };
+
+  const updateProfileFact = (
+    collection: ProfileFactCollection,
+    index: number,
+    key: "title" | "body",
+    value: string,
+  ) => {
+    setProfile((current) => ({
+      ...current,
+      [collection]: current[collection].map((fact, factIndex) =>
+        factIndex === index ? { ...fact, [key]: value } : fact,
+      ),
+    }));
+  };
+
+  const removeProfileFact = (collection: ProfileFactCollection, index: number) => {
+    setProfile((current) => ({
+      ...current,
+      [collection]: current[collection].filter(
+        (_, factIndex) => factIndex !== index,
+      ),
+    }));
+  };
+
   const uploadResume = async (file: File | null) => {
     if (!file) {
       return;
@@ -249,9 +285,10 @@ export function ProfilePage({
         name: file.name,
       });
       const updated = await getProfile();
-      lastSavedProfileRef.current = JSON.stringify(updated);
-      setProfile(updated);
-      onProfileUpdated?.(updated);
+      const normalized = normalizeProfileGeography(updated);
+      lastSavedProfileRef.current = JSON.stringify(normalized);
+      setProfile(normalized);
+      onProfileUpdated?.(normalized);
       setStatus("Resume replaced locally");
     } catch {
       setStatus("Resume upload failed");
@@ -273,9 +310,10 @@ export function ProfilePage({
     try {
       await deleteDocument(resumeDocument.id);
       const updated = await getProfile();
-      lastSavedProfileRef.current = JSON.stringify(updated);
-      setProfile(updated);
-      onProfileUpdated?.(updated);
+      const normalized = normalizeProfileGeography(updated);
+      lastSavedProfileRef.current = JSON.stringify(normalized);
+      setProfile(normalized);
+      onProfileUpdated?.(normalized);
       setStatus("Resume removed");
     } catch {
       setStatus("Resume removal failed");
@@ -349,9 +387,13 @@ export function ProfilePage({
               onChange={(value) => updateIdentity("address_line2", value)}
             />
             <ProfileCombobox
+              description="Type any city. Suggestions follow the selected state or province."
               label="City"
               value={profile.identity.location}
-              options={cityOptionsForCountry(profile.identity.country)}
+              options={cityOptionsForCountry(
+                profile.identity.country,
+                profile.identity.state,
+              )}
               onChange={(value) => updateIdentity("location", value)}
             />
             {stateOptionsForCountry(profile.identity.country).length ? (
@@ -615,8 +657,68 @@ export function ProfilePage({
           </Card>
         </div>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Optional Background</CardTitle>
+          <CardDescription>
+            Add only verified details. These entries become source material for
+            matching application fields and AI answers.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col divide-y divide-border">
+          <ProfileFactEditor
+            addLabel="Add experience"
+            bodyPlaceholder="Dates, location, responsibilities, and verified outcomes"
+            emptyLabel="No work experience added."
+            facts={profile.experience_facts}
+            title="Work Experience"
+            titlePlaceholder="Role · Company"
+            onAdd={() => addProfileFact("experience_facts")}
+            onRemove={(index) => removeProfileFact("experience_facts", index)}
+            onUpdate={(index, key, value) =>
+              updateProfileFact("experience_facts", index, key, value)
+            }
+          />
+          <ProfileFactEditor
+            addLabel="Add education"
+            bodyPlaceholder="Field of study, dates, and other verified details"
+            emptyLabel="No education added."
+            facts={profile.education}
+            title="Education"
+            titlePlaceholder="Degree · School"
+            onAdd={() => addProfileFact("education")}
+            onRemove={(index) => removeProfileFact("education", index)}
+            onUpdate={(index, key, value) =>
+              updateProfileFact("education", index, key, value)
+            }
+          />
+          <ProfileFactEditor
+            addLabel="Add certification"
+            bodyPlaceholder="Issuer, issue date, expiry date, credential ID, or URL"
+            emptyLabel="No certifications added."
+            facts={profile.certifications}
+            title="Certifications"
+            titlePlaceholder="Certification name"
+            onAdd={() => addProfileFact("certifications")}
+            onRemove={(index) => removeProfileFact("certifications", index)}
+            onUpdate={(index, key, value) =>
+              updateProfileFact("certifications", index, key, value)
+            }
+          />
+        </CardContent>
+      </Card>
     </PageShell>
   );
+}
+
+function createProfileFact(): Fact {
+  return {
+    id: `fact_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    title: "",
+    body: "",
+    tags: [],
+    source: "user",
+  };
 }
 
 function fullNameFromProfile(profile: Profile): string {
@@ -629,16 +731,25 @@ function normalizeProfileGeography(profile: Profile): Profile {
   const country = normalizeCountryCode(profile.identity.country);
   const state = normalizeStateCode(profile.identity.state, country);
   const aiContext = profile.ai_context ?? "";
+  const education = profile.education ?? [];
+  const experienceFacts = profile.experience_facts ?? [];
+  const certifications = profile.certifications ?? [];
   if (
     aiContext === profile.ai_context &&
     country === profile.identity.country &&
-    state === profile.identity.state
+    state === profile.identity.state &&
+    education === profile.education &&
+    experienceFacts === profile.experience_facts &&
+    certifications === profile.certifications
   ) {
     return profile;
   }
   return {
     ...profile,
     ai_context: aiContext,
+    education,
+    experience_facts: experienceFacts,
+    certifications,
     identity: {
       ...profile.identity,
       country,
@@ -1277,6 +1388,95 @@ function ProfileInput({
   );
 }
 
+function ProfileFactEditor({
+  addLabel,
+  bodyPlaceholder,
+  emptyLabel,
+  facts,
+  title,
+  titlePlaceholder,
+  onAdd,
+  onRemove,
+  onUpdate,
+}: {
+  addLabel: string;
+  bodyPlaceholder: string;
+  emptyLabel: string;
+  facts: Fact[];
+  title: string;
+  titlePlaceholder: string;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
+  onUpdate: (index: number, key: "title" | "body", value: string) => void;
+}) {
+  return (
+    <section className="grid min-w-0 grid-cols-[180px_minmax(0,1fr)] gap-6 py-5 first:pt-0 last:pb-0 max-[760px]:grid-cols-1 max-[760px]:gap-3">
+      <div>
+        <h3 className="text-base font-semibold">{title}</h3>
+        <Button
+          className="mt-3"
+          size="sm"
+          type="button"
+          variant="outline"
+          onClick={onAdd}
+        >
+          <Plus data-icon="inline-start" />
+          {addLabel}
+        </Button>
+      </div>
+      <div className="flex min-w-0 flex-col gap-3">
+        {facts.length ? (
+          facts.map((fact, index) => (
+            <div
+              className="rounded-md border border-border p-3"
+              key={fact.id || `${title}-${index}`}
+            >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {title} {index + 1}
+                </span>
+                <Button
+                  aria-label={`Remove ${title.toLowerCase()} ${index + 1}`}
+                  size="icon-xs"
+                  title="Remove"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => onRemove(index)}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+              <div className="flex flex-col gap-3">
+                <ProfileInput
+                  label="Title"
+                  placeholder={titlePlaceholder}
+                  value={fact.title}
+                  onChange={(value) => onUpdate(index, "title", value)}
+                />
+                <label className="flex flex-col gap-2 text-sm">
+                  <span className="leading-none font-medium">Details</span>
+                  <textarea
+                    className="min-h-24 resize-y px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    placeholder={bodyPlaceholder}
+                    value={fact.body}
+                    onChange={(event) =>
+                      onUpdate(index, "body", event.target.value)
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-md bg-muted px-3 py-4 text-sm text-muted-foreground">
+            {emptyLabel}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ProfileSelect({
   label,
   value,
@@ -1307,11 +1507,13 @@ function ProfileSelect({
 }
 
 function ProfileCombobox({
+  description,
   label,
   value,
   options,
   onChange,
 }: {
+  description?: string;
   label: string;
   value: string;
   options: string[];
@@ -1321,6 +1523,11 @@ function ProfileCombobox({
   return (
     <label className="flex flex-col gap-2 text-sm">
       <span className="leading-none font-medium">{label}</span>
+      {description ? (
+        <span className="text-xs leading-5 text-muted-foreground">
+          {description}
+        </span>
+      ) : null}
       <span className="relative">
         <Input
           className="w-full pr-10"

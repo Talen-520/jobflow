@@ -41,6 +41,7 @@ class ProfileTools:
         categories = categories or [
             "education",
             "experience_facts",
+            "certifications",
             "project_facts",
             "skill_facts",
         ]

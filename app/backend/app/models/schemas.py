@@ -114,6 +114,7 @@ class UserProfile(BaseModel):
     work_authorization: WorkAuthorization = Field(default_factory=WorkAuthorization)
     education: list[Fact] = Field(default_factory=list)
     experience_facts: list[Fact] = Field(default_factory=list)
+    certifications: list[Fact] = Field(default_factory=list)
     project_facts: list[Fact] = Field(default_factory=list)
     skill_facts: list[Fact] = Field(default_factory=list)
     documents: list[DocumentRecord] = Field(default_factory=list)

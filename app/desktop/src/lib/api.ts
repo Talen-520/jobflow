@@ -38,6 +38,7 @@ export type Profile = {
   };
   education: Fact[];
   experience_facts: Fact[];
+  certifications: Fact[];
   project_facts: Fact[];
   skill_facts: Fact[];
   documents: DocumentRecord[];
@@ -318,6 +319,7 @@ export const emptyProfile: Profile = {
   },
   education: [],
   experience_facts: [],
+  certifications: [],
   project_facts: [],
   skill_facts: [],
   documents: [],

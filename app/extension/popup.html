@@ -43,6 +43,26 @@
           Start filling
         </button>
         <p aria-live="polite" id="fill-status" class="fill-status"></p>
+        <div
+          aria-live="polite"
+          class="completion-state"
+          data-state="manual"
+          hidden
+          id="completion-state"
+        >
+          <svg
+            aria-hidden="true"
+            class="completion-icon"
+            data-icon="IoCheckmarkDoneSharp"
+            fill="none"
+            id="completion-icon"
+            viewBox="0 0 24 24"
+          >
+            <path d="m1.5 12.5 4 4L13 9" />
+            <path d="m9 12.5 4 4L22 7" />
+          </svg>
+          <span id="completion-text"></span>
+        </div>
       </section>
 
       <footer>CAPTCHA and submit stay manual.</footer>

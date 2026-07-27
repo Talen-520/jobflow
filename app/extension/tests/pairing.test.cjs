@@ -124,6 +124,10 @@ test("popup owns fill controls without pairing or manual page connection", () =>
   assert.match(popup, /Start filling/);
   assert.match(popup, /AI answers/);
   assert.match(popup, /CAPTCHA and submit stay manual/);
+  assert.match(popup, /IoCheckmarkDoneSharp/);
+  const popupScript = fs.readFileSync(path.join(extensionRoot, "popup.js"), "utf8");
+  assert.match(popupScript, /fields need.+filled manually/);
+  assert.match(popupScript, /All fields on this page are complete/);
 });
 
 test("detected forms open the toolbar popup without injecting page controls", () => {

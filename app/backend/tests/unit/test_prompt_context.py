@@ -24,6 +24,14 @@ def test_prompt_context_preview_lists_only_saved_sources() -> None:
                 tags=["automation"],
             )
         ],
+        certifications=[
+            Fact(
+                id="fact_aws",
+                title="AWS certification",
+                body="AWS Certified Solutions Architect, issued 2025.",
+                tags=["aws"],
+            )
+        ],
         answer_bank=[
             AnswerBankEntry(
                 id="answer_motivation",
@@ -44,6 +52,7 @@ def test_prompt_context_preview_lists_only_saved_sources() -> None:
     assert "profile.work_authorization.requires_sponsorship" in source_refs
     assert "profile.preferences.salary" in source_refs
     assert "experience_facts.fact_automation" in source_refs
+    assert "certifications.fact_aws" in source_refs
     assert "answer_bank.answer_motivation" in source_refs
     assert "profile.preferences.empty_note" not in source_refs
     assert preview.source_count == len(preview.sources)

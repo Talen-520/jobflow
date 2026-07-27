@@ -477,7 +477,16 @@
     const transfer = new DataTransfer();
     transfer.items.add(file);
     element.files = transfer.files;
+    const selectedFile = element.files?.[0];
+    const browserAcceptedFile =
+      Boolean(selectedFile) &&
+      selectedFile.name === documentPayload.filename &&
+      selectedFile.size === documentPayload.bytes.byteLength;
+    if (!browserAcceptedFile) {
+      throw new Error("Browser did not accept the local document.");
+    }
     dispatchInput(element);
+    return true;
   }
 
   function choiceButtonSelected(button) {
@@ -728,8 +737,7 @@
       return true;
     }
     if (item.action === "upload") {
-      await uploadFile(element, item.value);
-      return Boolean(element.files?.length);
+      return uploadFile(element, item.value);
     }
     throw new Error(`Unsupported fill action: ${item.action}`);
   }

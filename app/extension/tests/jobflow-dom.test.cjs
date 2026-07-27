@@ -677,6 +677,95 @@ test("document payload from the extension background decodes to bytes", () => {
   assert.equal(Buffer.from(decoded.bytes).toString(), "resume bytes");
 });
 
+test("Workday may clear a file input after accepting the resume", async () => {
+  const previousChrome = global.chrome;
+  const previousFile = global.File;
+  const previousDataTransfer = global.DataTransfer;
+  try {
+    global.chrome = {
+      runtime: {
+        sendMessage: async () => ({
+          ok: true,
+          payload: {
+            base64: Buffer.from("resume bytes").toString("base64"),
+            filename: "Tao Hu Résumé 2026.pdf",
+            type: "application/pdf",
+          },
+        }),
+      },
+    };
+    global.File = class {
+      constructor(parts, name, options) {
+        this.name = name;
+        this.size = parts.reduce((total, part) => total + part.byteLength, 0);
+        this.type = options.type;
+      }
+    };
+    global.DataTransfer = class {
+      constructor() {
+        this.files = [];
+        this.items = {
+          add: (file) => {
+            this.files.push(file);
+          },
+        };
+      }
+    };
+
+    const input = {
+      files: [],
+      tagName: "INPUT",
+      dispatchEvent(event) {
+        if (event.type === "change") this.files = [];
+      },
+    };
+    const documentObject = {
+      body: { textContent: "" },
+      querySelector() {
+        return null;
+      },
+      querySelectorAll(selector) {
+        return selector === '[data-automation-id="file-upload-input-ref"]'
+          ? [input]
+          : [];
+      },
+    };
+    const result = await applyFillPlan(
+      {
+        items: [
+          {
+            field_id: "file-upload-input-ref",
+            action: "upload",
+            value: "http://127.0.0.1:8765/extension/documents/resume",
+            confidence: 1,
+            needs_review: false,
+            source_refs: ["profile.documents.resume"],
+          },
+        ],
+        blocked_items: [],
+      },
+      {
+        fields: [
+          {
+            field_id: "file-upload-input-ref",
+            type: "file",
+            selector: '[data-automation-id="file-upload-input-ref"]',
+          },
+        ],
+      },
+      documentObject,
+    );
+
+    assert.equal(input.files.length, 0);
+    assert.equal(result.filled_count, 1);
+    assert.equal(result.error_count, 0);
+  } finally {
+    global.chrome = previousChrome;
+    global.File = previousFile;
+    global.DataTransfer = previousDataTransfer;
+  }
+});
+
 test("text verification accepts location normalization but rejects empty values", () => {
   assert.equal(textValueMatches("New York, NY", "New York"), true);
   assert.equal(textValueMatches("", "New York"), false);

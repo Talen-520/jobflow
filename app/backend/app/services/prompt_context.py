@@ -45,6 +45,9 @@ class PromptContextService:
             "experience_facts", "Experience fact", profile.experience_facts, sources
         )
         self._add_fact_sources(
+            "certifications", "Certification", profile.certifications, sources
+        )
+        self._add_fact_sources(
             "project_facts", "Project fact", profile.project_facts, sources
         )
         self._add_fact_sources("skill_facts", "Skill fact", profile.skill_facts, sources)

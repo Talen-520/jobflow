@@ -6,6 +6,9 @@ const detailElement = document.querySelector("#detail");
 const aiCustomFieldsElement = document.querySelector("#ai-custom-fields");
 const startFillElement = document.querySelector("#start-fill");
 const fillStatusElement = document.querySelector("#fill-status");
+const completionStateElement = document.querySelector("#completion-state");
+const completionIconElement = document.querySelector("#completion-icon");
+const completionTextElement = document.querySelector("#completion-text");
 
 function atsLabel(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -18,6 +21,25 @@ function atsLabel(value) {
     generic: "Application",
   };
   return labels[normalized] || "Application";
+}
+
+function renderCompletion(result) {
+  if (!result) {
+    completionStateElement.hidden = true;
+    completionTextElement.textContent = "";
+    return;
+  }
+  const manualCount = ["review_count", "skipped_count", "error_count"].reduce(
+    (total, key) => total + Number(result[key] || 0),
+    0,
+  );
+  const complete = manualCount === 0;
+  completionStateElement.hidden = false;
+  completionStateElement.dataset.state = complete ? "complete" : "manual";
+  completionIconElement.toggleAttribute("hidden", !complete);
+  completionTextElement.textContent = complete
+    ? "All fields on this page are complete."
+    : `${manualCount} ${manualCount === 1 ? "field needs" : "fields need"} to be filled manually.`;
 }
 
 function render(status) {
@@ -64,7 +86,8 @@ function render(status) {
     : status.fillResult
       ? "Fill again"
       : "Start filling";
-  fillStatusElement.textContent = status.fillMessage || "";
+  fillStatusElement.textContent = status.fillResult ? "" : status.fillMessage || "";
+  renderCompletion(status.fillResult);
 }
 
 async function refresh() {
@@ -80,7 +103,10 @@ const previewState = new URLSearchParams(globalThis.location?.search || "").get(
   "preview",
 );
 
-if (globalThis.location?.protocol === "http:" && previewState === "workday") {
+if (
+  globalThis.location?.protocol === "http:" &&
+  ["workday", "manual", "complete"].includes(previewState)
+) {
   render({
     connected: true,
     connecting: false,
@@ -90,7 +116,22 @@ if (globalThis.location?.protocol === "http:" && previewState === "workday") {
     aiCustomFields: true,
     fillStatus: "idle",
     fillMessage: "",
-    fillResult: null,
+    fillResult:
+      previewState === "manual"
+        ? {
+            filled_count: 8,
+            skipped_count: 1,
+            review_count: 3,
+            error_count: 0,
+          }
+        : previewState === "complete"
+          ? {
+              filled_count: 12,
+              skipped_count: 0,
+              review_count: 0,
+              error_count: 0,
+            }
+          : null,
   });
 } else {
   chrome.runtime.onMessage.addListener((message) => {
