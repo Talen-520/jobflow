@@ -49,16 +49,11 @@ input {
 }
 
 .mark {
-  display: grid;
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
-  place-items: center;
   border-radius: 7px;
-  background: hsl(0 0% 9%);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 700;
+  object-fit: cover;
 }
 
 h1,
