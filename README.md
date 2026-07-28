@@ -154,7 +154,8 @@ Verification evidence:
 ## Current Extension Verification
 
 - Backend suite: `91 passed`.
-- Extension JavaScript syntax checks and `38` extension tests: passed.
+- Extension JavaScript syntax checks and `41` extension tests: passed.
+- Desktop Education suggestion test: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
   simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.
@@ -176,6 +177,18 @@ Verification evidence:
   values, matches prefixed school search results, and reports a missing Profile
   Degree as review instead of a browser error. Optional fields without saved
   Profile data are left blank without inflating the manual remainder count.
+- Extension `0.8.7` pairs Workday degree aliases with searchable Profile
+  Education inputs. School, Degree, and Field of study preserve free text while
+  offering canonical suggestions; exact abbreviations such as `BS` and `CS`
+  normalize to saved standard values.
+- Extension `0.8.8` commits Workday School or University suggestions through
+  the site's pointer-driven autocomplete interaction. Re-running Fill also
+  recognizes an already successful Resume/CV upload before reading the local
+  document, so the same resume is not attached again.
+- Extension `0.8.9` treats Workday School or University as a prompt-backed
+  multi-select. It submits the search with Enter, selects the matching
+  `promptOption` radio, and reports success only after a `selectedItem` exists;
+  typed search text and `0 items selected` are never accepted as filled.
 
 ## Quick Start
 

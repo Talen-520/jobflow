@@ -160,6 +160,23 @@ test("custom combobox values accept boolean Yes and No aliases", () => {
     "usa",
     "us",
   ]);
+  assert.deepEqual(choiceValueAliases("Bachelor's Degree"), [
+    "bachelor's degree",
+    "bachelors degree",
+    "bachelor degree",
+    "bachelor of arts",
+    "bachelor of science",
+  ]);
+});
+
+test("standard Profile degrees expose compatible Workday option aliases", () => {
+  assert.ok(choiceValueAliases("Associate's Degree").includes("associate of science"));
+  assert.ok(choiceValueAliases("Master's Degree").includes("master of science"));
+  assert.ok(choiceValueAliases("Doctoral Degree").includes("doctor of philosophy"));
+  assert.ok(
+    choiceValueAliases("Master of Business Administration (MBA)").includes("mba"),
+  );
+  assert.ok(choiceValueAliases("Juris Doctor (JD)").includes("juris doctor"));
 });
 
 test("Workday listbox buttons are retained while ordinary buttons are ignored", () => {
@@ -769,6 +786,94 @@ test("Workday may clear a file input after accepting the resume", async () => {
   }
 });
 
+test("Fill again skips an already uploaded Workday resume", async () => {
+  const previousChrome = global.chrome;
+  let documentFetches = 0;
+  try {
+    global.chrome = {
+      runtime: {
+        sendMessage: async () => {
+          documentFetches += 1;
+          throw new Error("An existing resume must not be fetched again.");
+        },
+      },
+    };
+
+    const resumeSection = {
+      parentElement: null,
+      textContent:
+        "Resume/CV Resume - SWE.pdf 87.11 KB Successfully Uploaded!",
+      querySelectorAll(selector) {
+        return selector === "button"
+          ? [
+              {
+                textContent: "",
+                getAttribute(name) {
+                  return name === "aria-label" ? "Delete Resume - SWE.pdf" : "";
+                },
+              },
+            ]
+          : [];
+      },
+    };
+    const uploadContainer = {
+      parentElement: resumeSection,
+      textContent: "Upload a file",
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const input = {
+      files: [],
+      parentElement: uploadContainer,
+      tagName: "INPUT",
+    };
+    const documentObject = {
+      body: resumeSection,
+      querySelector() {
+        return null;
+      },
+      querySelectorAll(selector) {
+        return selector === '[data-automation-id="file-upload-input-ref"]'
+          ? [input]
+          : [];
+      },
+    };
+
+    const result = await applyFillPlan(
+      {
+        items: [
+          {
+            field_id: "file-upload-input-ref",
+            action: "upload",
+            value: "http://127.0.0.1:8765/extension/documents/resume",
+            confidence: 1,
+            needs_review: false,
+            source_refs: ["profile.documents.resume"],
+          },
+        ],
+        blocked_items: [],
+      },
+      {
+        fields: [
+          {
+            field_id: "file-upload-input-ref",
+            type: "file",
+            selector: '[data-automation-id="file-upload-input-ref"]',
+          },
+        ],
+      },
+      documentObject,
+    );
+
+    assert.equal(documentFetches, 0);
+    assert.equal(result.filled_count, 1);
+    assert.equal(result.error_count, 0);
+  } finally {
+    global.chrome = previousChrome;
+  }
+});
+
 test("text verification accepts location normalization but rejects empty values", () => {
   assert.equal(textValueMatches("New York, NY", "New York"), true);
   assert.equal(textValueMatches("", "New York"), false);
@@ -1273,9 +1378,10 @@ test("Workday repeat action selects structured education values", async () => {
       closest() {
         return null;
       },
-      click() {
-        school.value = this.textContent;
+      dispatchEvent(event) {
+        if (event.type === "mousedown") school.value = this.textContent;
       },
+      click() {},
     },
     {
       textContent: "Computer Science",
@@ -1361,6 +1467,111 @@ test("Workday repeat action selects structured education values", async () => {
   assert.deepEqual(months.map((control) => control.value), ["8", "5"]);
   assert.deepEqual(years.map((control) => control.value), ["2018", "2022"]);
   assert.equal(educationStatus.value, "graduated");
+});
+
+test("Workday school commits a prompt option as a selected item", async () => {
+  let selectedItems = [];
+  let searchSubmitted = false;
+  const school = {
+    tagName: "INPUT",
+    value: "Queens College",
+    parentElement: null,
+    getAttribute(name) {
+      return name === "data-automation-id" ? "searchBox" : "";
+    },
+    dispatchEvent(event) {
+      if (event.type === "keydown" && event.key === "Enter") {
+        searchSubmitted = true;
+      }
+    },
+    focus() {},
+  };
+  const row = {
+    parentElement: null,
+    get textContent() {
+      return `${selectedItems.length} items selected`;
+    },
+    querySelector(selector) {
+      return selector === '[data-automation-id="searchBox"]' ? school : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "button") return [{ textContent: "Delete" }];
+      if (selector === '[data-automation-id="selectedItem"]') {
+        return selectedItems;
+      }
+      return [];
+    },
+  };
+  school.parentElement = row;
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [];
+      if (selector.includes("[role='heading']")) {
+        return [{ textContent: "Education 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  row.parentElement = section;
+  const radio = {
+    click() {
+      selectedItems = [
+        {
+          textContent: "CUNY - Queens College",
+          getAttribute() {
+            return "";
+          },
+        },
+      ];
+      school.value = "";
+    },
+    dispatchEvent() {},
+  };
+  const optionContainer = {
+    click() {},
+    dispatchEvent() {},
+    querySelector(selector) {
+      return selector.includes('input[type="radio"]') ? radio : null;
+    },
+  };
+  const promptOption = {
+    textContent: "CUNY - Queens College",
+    dataset: { automationLabel: "CUNY - Queens College" },
+    ownerDocument: null,
+    getClientRects() {
+      return [{}];
+    },
+    closest(selector) {
+      if (selector === '[data-automation-id="selectedItem"]') return null;
+      return selector === '[role="option"]' ? optionContainer : null;
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+    querySelectorAll(selector) {
+      return searchSubmitted &&
+        selector.includes('[data-automation-id="promptOption"]')
+        ? [promptOption]
+        : [];
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-education",
+      selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+      value: [{ school: "Queens College" }],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(selectedItems.length, 1);
+  assert.equal(selectedItems[0].textContent, "CUNY - Queens College");
+  assert.equal(school.value, "");
 });
 
 test("Workday repeat action keeps already selected education values", async () => {

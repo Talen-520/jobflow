@@ -79,6 +79,10 @@ button:not(:disabled),
   cursor: pointer;
 }
 
+.profile-combobox-input[list]::-webkit-calendar-picker-indicator {
+  display: none !important;
+}
+
 @layer utilities {
   .border-border {
     border-color: hsl(var(--border)) !important;

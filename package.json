@@ -11,6 +11,7 @@
     "smoke": "node scripts/smoke.mjs",
     "desktop:dev": "npm --workspace app/desktop run dev",
     "desktop:build": "npm --workspace app/desktop run build",
+    "desktop:test": "node --test app/desktop/tests/*.test.cjs",
     "desktop:tauri": "npm --workspace app/desktop run tauri",
     "backend:test": "cd app/backend && uv run pytest",
     "extension:test": "node --test app/extension/tests/*.test.cjs",

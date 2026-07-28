@@ -67,6 +67,14 @@ import {
   normalizeStateCode,
   stateOptionsForCountry,
 } from "@/lib/locations";
+import {
+  canonicalEducationOption,
+  EDUCATION_DEGREE_ALIASES,
+  EDUCATION_DEGREE_OPTIONS,
+  EDUCATION_FIELD_ALIASES,
+  EDUCATION_FIELD_OPTIONS,
+  EDUCATION_SCHOOL_OPTIONS,
+} from "@/lib/education-options";
 import { cn } from "@/lib/utils";
 
 type ModelOption = {
@@ -1539,20 +1547,25 @@ function ProfileFactEditor({
               ) : null}
               {kind === "education" ? (
                 <div className="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
-                  <ProfileInput
+                  <ProfileCombobox
                     label="School or university"
                     value={fact.title}
+                    options={EDUCATION_SCHOOL_OPTIONS}
                     onChange={(value) => onUpdate(index, "title", value)}
                   />
-                  <ProfileInput
+                  <ProfileCombobox
+                    aliases={EDUCATION_DEGREE_ALIASES}
                     label="Degree"
                     value={fact.degree ?? ""}
+                    options={EDUCATION_DEGREE_OPTIONS}
                     onChange={(value) => onUpdate(index, "degree", value)}
                   />
                   <div className="col-span-2 max-[760px]:col-span-1">
-                    <ProfileInput
+                    <ProfileCombobox
+                      aliases={EDUCATION_FIELD_ALIASES}
                       label="Field of study"
                       value={fact.body}
+                      options={EDUCATION_FIELD_OPTIONS}
                       onChange={(value) => onUpdate(index, "body", value)}
                     />
                   </div>
@@ -1652,28 +1665,38 @@ function ProfileSelect({
 }
 
 function ProfileCombobox({
+  aliases,
   description,
   label,
   value,
   options,
   onChange,
 }: {
+  aliases?: Readonly<Record<string, string>>;
   description?: string;
   label: string;
   value: string;
-  options: string[];
+  options: readonly string[];
   onChange: (value: string) => void;
 }) {
-  const listId = `profile-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  const listId = useId();
   return (
     <label className="flex flex-col gap-2 text-sm">
       <FieldLabel description={description} label={label} />
       <span className="relative">
         <Input
-          className="w-full pr-10"
+          className="profile-combobox-input w-full pr-10"
           list={listId}
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onBlur={(event) => {
+            const canonical = canonicalEducationOption(
+              event.target.value,
+              options,
+              aliases,
+            );
+            if (canonical !== value) onChange(canonical);
+          }}
         />
         <IoChevronDown className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       </span>

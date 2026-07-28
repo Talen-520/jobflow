@@ -536,7 +536,47 @@
     };
   }
 
-  async function uploadFile(element, sourceUrl) {
+  function uploadedResumePresent(element, documentObject) {
+    if (element.files?.length) return true;
+    const candidates = [];
+    const seen = new Set();
+    let current = element.parentElement;
+    for (let depth = 0; current && depth < 10; depth += 1) {
+      if (!seen.has(current)) {
+        candidates.push(current);
+        seen.add(current);
+      }
+      current = current.parentElement;
+    }
+    if (documentObject.body && !seen.has(documentObject.body)) {
+      candidates.push(documentObject.body);
+    }
+    return candidates.some((candidate) => {
+      const text = clean(candidate.innerText || candidate.textContent);
+      if (
+        /resume(?:\s*\/\s*cv)?/i.test(text) &&
+        /successfully uploaded/i.test(text)
+      ) {
+        return true;
+      }
+      return Array.from(candidate.querySelectorAll?.("button") || []).some(
+        (button) => {
+          const label = clean(
+            button.getAttribute?.("aria-label") ||
+              button.getAttribute?.("title") ||
+              button.textContent,
+          );
+          return (
+            /\bdelete\b/i.test(label) &&
+            /\.(?:pdf|docx?|rtf)\b/i.test(label)
+          );
+        },
+      );
+    });
+  }
+
+  async function uploadFile(element, sourceUrl, documentObject) {
+    if (uploadedResumePresent(element, documentObject)) return true;
     const response = await chrome.runtime.sendMessage({
       type: "jobflow.fetch_document",
       url: String(sourceUrl),
@@ -595,6 +635,62 @@
     return expected.length >= 4 && actual.includes(expected);
   }
 
+  const DEGREE_ALIAS_GROUPS = [
+    {
+      values: ["associate's degree", "associates degree", "associate degree", "aa", "as"],
+      options: [
+        "associate's degree",
+        "associates degree",
+        "associate degree",
+        "associate of arts",
+        "associate of science",
+      ],
+    },
+    {
+      values: [
+        "bachelor's degree",
+        "bachelors degree",
+        "bachelor degree",
+        "ba",
+        "bs",
+        "bsc",
+      ],
+      options: [
+        "bachelor's degree",
+        "bachelors degree",
+        "bachelor degree",
+        "bachelor of arts",
+        "bachelor of science",
+      ],
+    },
+    {
+      values: ["master's degree", "masters degree", "master degree", "ma", "ms", "msc"],
+      options: [
+        "master's degree",
+        "masters degree",
+        "master degree",
+        "master of arts",
+        "master of science",
+      ],
+    },
+    {
+      values: ["doctoral degree", "doctorate", "phd"],
+      options: ["doctoral degree", "doctorate", "phd", "doctor of philosophy"],
+    },
+    {
+      values: [
+        "master of business administration (mba)",
+        "master of business administration",
+        "mba",
+      ],
+      options: ["master of business administration", "mba"],
+    },
+    {
+      values: ["juris doctor (jd)", "juris doctor", "jd"],
+      options: ["juris doctor", "jd"],
+    },
+  ];
+
   function choiceValueAliases(value) {
     const normalized = clean(value).toLowerCase();
     if (["true", "yes", "y", "1"].includes(normalized)) {
@@ -606,6 +702,10 @@
     if (["united states", "united states of america", "usa", "us"].includes(normalized)) {
       return ["united states", "united states of america", "usa", "us"];
     }
+    const degreeGroup = DEGREE_ALIAS_GROUPS.find((group) =>
+      group.values.includes(normalized),
+    );
+    if (degreeGroup) return degreeGroup.options;
     const stateName = US_STATE_NAMES[clean(value).toUpperCase()];
     if (stateName) return [normalized, stateName.toLowerCase()];
     return [normalized];
@@ -663,13 +763,16 @@
 
   function visibleChoiceOptions(documentObject, element) {
     const roots = choiceOptionRoots(element, documentObject);
-    const optionSelector = '[role="option"], [id*="-option-"], .select__option';
+    const optionSelector =
+      '[role="option"], [id*="-option-"], .select__option, ' +
+      '[data-automation-id="promptOption"]';
     const candidates = roots.length
       ? roots.flatMap((root) => Array.from(root.querySelectorAll(optionSelector)))
       : Array.from(documentObject.querySelectorAll(optionSelector));
     return candidates.filter((candidate) => {
       const view = candidate.ownerDocument?.defaultView;
       if (candidate.closest?.("[hidden], [aria-hidden='true']")) return false;
+      if (candidate.closest?.('[data-automation-id="selectedItem"]')) return false;
       if (candidate.getClientRects && candidate.getClientRects().length === 0) {
         return false;
       }
@@ -871,14 +974,111 @@
     return true;
   }
 
+  function workdaySearchContainer(control) {
+    let current = control;
+    for (let depth = 0; current && depth < 10; depth += 1) {
+      const text = clean(current.innerText || current.textContent);
+      if (
+        /\b\d+\s+items?(?:\s+are)?\s+selected\b/i.test(text) ||
+        current.querySelectorAll?.('[data-automation-id="selectedItem"]')?.length
+      ) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function workdaySelectedChoiceMatches(control, expected) {
+    const container = workdaySearchContainer(control);
+    return Array.from(
+      container?.querySelectorAll?.('[data-automation-id="selectedItem"]') || [],
+    ).some((item) =>
+      workdaySearchTextMatches(
+        item.getAttribute?.("data-automation-label") || item.textContent,
+        expected,
+      ),
+    );
+  }
+
+  function activateWorkdaySearchOption(match, documentObject) {
+    const option =
+      match.closest?.('[role="option"]') ||
+      match.parentElement?.closest?.('[role="option"]') ||
+      match;
+    const radio =
+      option.querySelector?.(
+        'input[type="radio"], [data-automation-id="radioBtn"]',
+      ) ||
+      match.querySelector?.(
+        'input[type="radio"], [data-automation-id="radioBtn"]',
+      );
+    const target = radio || option;
+    const MouseEventConstructor =
+      documentObject.defaultView?.MouseEvent ||
+      globalObject.MouseEvent ||
+      globalObject.Event;
+    if (target.dispatchEvent && MouseEventConstructor) {
+      target.dispatchEvent(
+        new MouseEventConstructor("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: 1,
+        }),
+      );
+    }
+    target.click?.();
+    if (radio?.dispatchEvent) {
+      radio.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  function submitWorkdaySearch(control, documentObject) {
+    const KeyboardEventConstructor =
+      documentObject.defaultView?.KeyboardEvent ||
+      globalObject.KeyboardEvent;
+    for (const type of ["keydown", "keyup"]) {
+      const event = KeyboardEventConstructor
+        ? new KeyboardEventConstructor(type, {
+            key: "Enter",
+            code: "Enter",
+            bubbles: true,
+            cancelable: true,
+          })
+        : new Event(type, { bubbles: true, cancelable: true });
+      if (!KeyboardEventConstructor) {
+        Object.defineProperties(event, {
+          key: { value: "Enter" },
+          code: { value: "Enter" },
+        });
+      }
+      control.dispatchEvent(event);
+    }
+  }
+
   async function setWorkdaySearchChoice(control, value, documentObject) {
     const expected = clean(value);
     if (!expected) return true;
     if (!control) return false;
-    if (textValueMatches(control.value, expected)) return true;
+    const requiresSelectedItem = Boolean(workdaySearchContainer(control));
+    if (
+      requiresSelectedItem &&
+      workdaySelectedChoiceMatches(control, expected)
+    ) {
+      return true;
+    }
+    if (
+      !requiresSelectedItem &&
+      textValueMatches(control.value, expected)
+    ) {
+      return true;
+    }
     control.focus?.();
     setNativeValue(control, expected, false);
     await waitForChoiceState(documentObject, 160);
+    submitWorkdaySearch(control, documentObject);
+    await waitForChoiceState(documentObject, 300);
     const { match } = await waitForMatchingChoice(
       documentObject,
       control,
@@ -887,9 +1087,14 @@
       workdaySearchTextMatches,
     );
     if (!match) return false;
-    match.click();
-    await waitForChoiceState(documentObject);
-    return true;
+    activateWorkdaySearchOption(match, documentObject);
+    await waitForChoiceState(documentObject, 300);
+    if (!requiresSelectedItem) return true;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (workdaySelectedChoiceMatches(control, expected)) return true;
+      await waitForChoiceState(documentObject, 100);
+    }
+    return false;
   }
 
   async function applyWorkdayRepeater(item, documentObject) {
@@ -1112,7 +1317,7 @@
       return true;
     }
     if (item.action === "upload") {
-      return uploadFile(element, item.value);
+      return uploadFile(element, item.value, documentObject);
     }
     throw new Error(`Unsupported fill action: ${item.action}`);
   }
