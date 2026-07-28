@@ -153,8 +153,8 @@ Verification evidence:
 
 ## Current Extension Verification
 
-- Backend suite: `89 passed`.
-- Extension JavaScript syntax checks and `36` extension tests: passed.
+- Backend suite: `91 passed`.
+- Extension JavaScript syntax checks and `38` extension tests: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
   simulator across generic, Lever, Greenhouse, Ashby, Oracle, and Workday.
@@ -172,6 +172,10 @@ Verification evidence:
   browser-verified Work Experience, Education, and two Website rows with
   `3` filled and `0` errors. Certifications stayed collapsed because the Profile
   contains no certification data. The run did not navigate or submit.
+- Extension `0.8.6` writes Workday date steppers without zero-padded numeric
+  values, matches prefixed school search results, and reports a missing Profile
+  Degree as review instead of a browser error. Optional fields without saved
+  Profile data are left blank without inflating the manual remainder count.
 
 ## Quick Start
 

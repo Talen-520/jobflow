@@ -1135,14 +1135,26 @@ test("Workday repeat action fills a structured work experience row", async () =>
     },
     dispatchEvent() {},
   });
+  const makeNumericInput = () => {
+    let value = "";
+    return {
+      ...makeInput(),
+      get value() {
+        return value;
+      },
+      set value(nextValue) {
+        value = /^0\d$/.test(String(nextValue)) ? "" : String(nextValue);
+      },
+    };
+  };
   const controls = {
     jobTitle: makeInput(),
     companyName: makeInput(),
     location: makeInput(),
     current: makeInput(),
     description: { ...makeInput(), tagName: "TEXTAREA" },
-    months: [makeInput(), makeInput()],
-    years: [makeInput(), makeInput()],
+    months: [makeNumericInput(), makeNumericInput()],
+    years: [makeNumericInput(), makeNumericInput()],
   };
   let row = null;
   const section = {
@@ -1213,7 +1225,7 @@ test("Workday repeat action fills a structured work experience row", async () =>
   assert.equal(controls.companyName.value, "Example Inc.");
   assert.equal(controls.location.value, "New York, NY");
   assert.equal(controls.current.checked, false);
-  assert.deepEqual(controls.months.map((control) => control.value), ["01", "06"]);
+  assert.deepEqual(controls.months.map((control) => control.value), ["1", "6"]);
   assert.deepEqual(controls.years.map((control) => control.value), ["2022", "2024"]);
   assert.equal(controls.description.value, "Operated production services.");
 });
@@ -1253,7 +1265,7 @@ test("Workday repeat action selects structured education values", async () => {
   };
   const options = [
     {
-      textContent: "Queens College",
+      textContent: "CUNY - Queens College",
       ownerDocument: null,
       getClientRects() {
         return [{}];
@@ -1343,10 +1355,10 @@ test("Workday repeat action selects structured education values", async () => {
   );
 
   assert.equal(verified, true);
-  assert.equal(school.value, "Queens College");
+  assert.equal(school.value, "CUNY - Queens College");
   assert.equal(degree.value, "bachelors");
   assert.equal(fieldOfStudy.value, "Computer Science");
-  assert.deepEqual(months.map((control) => control.value), ["08", "05"]);
+  assert.deepEqual(months.map((control) => control.value), ["8", "5"]);
   assert.deepEqual(years.map((control) => control.value), ["2018", "2022"]);
   assert.equal(educationStatus.value, "graduated");
 });
@@ -1418,6 +1430,98 @@ test("Workday repeat action keeps already selected education values", async () =
   assert.equal(verified, true);
   assert.equal(school.value, "Queens College");
   assert.equal(fieldOfStudy.value, "Computer Science");
+});
+
+test("Workday education reports a missing Profile degree for manual review", async () => {
+  const school = {
+    tagName: "INPUT",
+    value: "Queens College",
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent() {},
+    focus() {},
+  };
+  const fieldOfStudy = {
+    ...school,
+    value: "Computer Science",
+  };
+  const row = {
+    parentElement: null,
+    querySelector(selector) {
+      return {
+        '[data-automation-id="searchBox"]': school,
+        '[id$="--fieldOfStudy"]': fieldOfStudy,
+      }[selector] || null;
+    },
+    querySelectorAll(selector) {
+      return selector === "button" ? [{ textContent: "Delete" }] : [];
+    },
+  };
+  const section = {
+    querySelectorAll(selector) {
+      if (selector.includes("[role='heading']")) {
+        return [{ textContent: "Education 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  row.parentElement = section;
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: {
+      setTimeout(callback) {
+        callback();
+      },
+    },
+    querySelector() {
+      return section;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "jobflow-workday-education",
+          action: "repeat",
+          selector:
+            '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+          value: [
+            {
+              school: "Queens College",
+              degree: "",
+              field_of_study: "Computer Science",
+            },
+          ],
+          confidence: 1,
+          needs_review: false,
+          source_refs: ["profile.education_facts"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "jobflow-workday-education",
+          type: "unknown",
+          selector:
+            '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(result.filled_count, 0);
+  assert.equal(result.review_count, 1);
+  assert.equal(result.error_count, 0);
+  assert.equal(result.items[0].status, "needs_review");
+  assert.match(result.items[0].reason, /Degree.*Profile/i);
 });
 
 test("Workday repeat action fills a structured certification row", async () => {
@@ -1515,7 +1619,7 @@ test("Workday repeat action fills a structured certification row", async () => {
   assert.equal(verified, true);
   assert.equal(name.value, "AWS Certified Developer");
   assert.equal(number.value, "ABC-123");
-  assert.deepEqual(months.map((control) => control.value), ["01", "06"]);
+  assert.deepEqual(months.map((control) => control.value), ["1", "6"]);
   assert.deepEqual(days.map((control) => control.value), ["15", "30"]);
   assert.deepEqual(years.map((control) => control.value), ["2024", "2027"]);
 });

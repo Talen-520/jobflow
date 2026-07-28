@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import {
   IoAdd,
-  IoCalendarOutline,
   IoCheckmarkDoneSharp,
   IoChevronDown,
   IoHelpCircleOutline,
@@ -32,6 +31,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import {
   type ApplicationRecord,
@@ -1416,25 +1416,14 @@ function ProfileDateInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="flex flex-col gap-2 text-sm">
+    <div className="flex flex-col gap-2 text-sm">
       <span className="leading-none font-medium">{label}</span>
-      <span className="relative">
-        <Input
-          className="w-full pr-10 [&::-webkit-calendar-picker-indicator]:opacity-0"
-          type="date"
-          value={value}
-          onClick={(event) => {
-            try {
-              event.currentTarget.showPicker?.();
-            } catch {
-              // The native date input still handles the click when showPicker is unavailable.
-            }
-          }}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <IoCalendarOutline className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      </span>
-    </label>
+      <DatePicker
+        aria-label={label}
+        value={value}
+        onChange={onChange}
+      />
+    </div>
   );
 }
 

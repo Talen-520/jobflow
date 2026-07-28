@@ -29,10 +29,7 @@ function renderCompletion(result) {
     completionTextElement.textContent = "";
     return;
   }
-  const manualCount = ["review_count", "skipped_count", "error_count"].reduce(
-    (total, key) => total + Number(result[key] || 0),
-    0,
-  );
+  const manualCount = globalThis.JobFlowPopupState.manualFieldCount(result);
   const complete = manualCount === 0;
   completionStateElement.hidden = false;
   completionStateElement.dataset.state = complete ? "complete" : "manual";

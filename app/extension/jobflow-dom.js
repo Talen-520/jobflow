@@ -588,6 +588,13 @@
     return /^\s*[\(\[\{,;:/-]/.test(actual.slice(expected.length));
   }
 
+  function workdaySearchTextMatches(actualValue, expectedValue) {
+    if (choiceTextMatches(actualValue, expectedValue)) return true;
+    const actual = clean(actualValue).toLowerCase();
+    const expected = clean(expectedValue).toLowerCase();
+    return expected.length >= 4 && actual.includes(expected);
+  }
+
   function choiceValueAliases(value) {
     const normalized = clean(value).toLowerCase();
     if (["true", "yes", "y", "1"].includes(normalized)) {
@@ -677,12 +684,13 @@
     element,
     expectedValues,
     attempts = 20,
+    matches = choiceTextMatches,
   ) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const options = visibleChoiceOptions(documentObject, element);
       const match = options.find((candidate) =>
         expectedValues.some((expected) =>
-          choiceTextMatches(candidate.textContent, expected),
+          matches(candidate.textContent, expected),
         ),
       );
       if (match) return { match, options };
@@ -787,6 +795,15 @@
     return textValueMatches(control.value, expected);
   }
 
+  function setWorkdayNumericText(control, value) {
+    const expected = clean(value);
+    if (!expected) return true;
+    if (!control || !/^\d+$/.test(expected)) return false;
+    const normalized = String(Number(expected));
+    setNativeValue(control, normalized);
+    return Number(control.value) === Number(normalized);
+  }
+
   function setWorkdayDateParts(row, startDate, endDate) {
     const months = Array.from(
       row.querySelectorAll?.('[data-automation-id="dateSectionMonth-input"]') || [],
@@ -799,8 +816,8 @@
       if (!clean(date)) return true;
       const [year = "", month = ""] = clean(date).split("-");
       return (
-        setWorkdayText(months[index], month) &&
-        setWorkdayText(years[index], year)
+        setWorkdayNumericText(months[index], month) &&
+        setWorkdayNumericText(years[index], year)
       );
     });
   }
@@ -819,9 +836,9 @@
       if (!clean(date)) return true;
       const [year = "", month = "", day = ""] = clean(date).split("-");
       return (
-        setWorkdayText(months[index], month) &&
-        setWorkdayText(days[index], day) &&
-        setWorkdayText(years[index], year)
+        setWorkdayNumericText(months[index], month) &&
+        setWorkdayNumericText(days[index], day) &&
+        setWorkdayNumericText(years[index], year)
       );
     });
   }
@@ -866,6 +883,8 @@
       documentObject,
       control,
       [expected.toLowerCase()],
+      20,
+      workdaySearchTextMatches,
     );
     if (!match) return false;
     match.click();
@@ -1098,6 +1117,18 @@
     throw new Error(`Unsupported fill action: ${item.action}`);
   }
 
+  function profileReviewReason(item) {
+    if (item.field_id !== "jobflow-workday-education") return "";
+    const entries = Array.isArray(item.value) ? item.value : [];
+    const missing = new Set();
+    for (const entry of entries) {
+      if (!clean(entry.school)) missing.add("School");
+      if (!clean(entry.degree)) missing.add("Degree");
+    }
+    if (!missing.size) return "";
+    return `${[...missing].join(" and ")} is missing from Profile. Available Education values were filled; complete the missing field manually.`;
+  }
+
   async function applyFillPlan(plan, form, documentObject = document) {
     const captchaDetected = captchaPresent(documentObject);
     const eligible = eligiblePlanItems(plan, captchaDetected);
@@ -1128,6 +1159,16 @@
       try {
         const verified = await applyItem(item, fields.get(item.field_id), documentObject);
         if (!verified) throw new Error("Browser value did not match after writing.");
+        const reviewReason = profileReviewReason(item);
+        if (reviewReason) {
+          result.items.push({
+            field_id: item.field_id,
+            status: "needs_review",
+            reason: reviewReason,
+          });
+          result.review_count += 1;
+          continue;
+        }
         result.items.push({
           field_id: item.field_id,
           status: "filled",

@@ -201,7 +201,7 @@ def test_fill_plan_maps_workday_identity_and_region_without_guessing_phone_type(
     assert items["country"].value == "United States"
     assert items["countryRegion"].value == "NY"
     assert items["phoneType"].action == "skip"
-    assert items["phoneType"].needs_review is True
+    assert items["phoneType"].needs_review is False
 
 
 def test_fill_plan_maps_workday_repeaters_from_structured_profile_data() -> None:
@@ -765,6 +765,28 @@ def test_missing_fact_policy_can_leave_required_field_blank() -> None:
     assert blank_item.value == ""
     assert blank_item.needs_review is False
     assert "missing-fact policy" in blank_item.reason
+
+
+def test_optional_field_without_profile_data_does_not_require_manual_review() -> None:
+    form = FormSchema(
+        fields=[
+            FormField(
+                field_id="twitterAccount",
+                label="Twitter",
+                type=FieldType.text,
+                required=False,
+                selector="#twitterAccount",
+            )
+        ]
+    )
+
+    plan = FillPlanService().create_plan(form, UserProfile(), Preferences())
+
+    assert plan.blocked_items == []
+    optional_item = plan.items[0]
+    assert optional_item.action == "skip"
+    assert optional_item.needs_review is False
+    assert "Optional field" in optional_item.reason
 
 
 def test_salary_policy_can_leave_sensitive_salary_blank() -> None:

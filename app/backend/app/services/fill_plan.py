@@ -604,21 +604,11 @@ class FillPlanService:
         )
 
     def _optional_missing_fact_item(
-        self, field: FormField, preferences: Preferences
+        self, field: FormField, _preferences: Preferences
     ) -> FillPlanItem:
-        if preferences.missing_fact_policy == "leave_blank":
-            return self._blank_item(
-                field,
-                "Optional field left blank because missing-fact policy is leave_blank.",
-            )
-        return FillPlanItem(
-            field_id=field.field_id,
-            action="skip",
-            value="",
-            selector=field.selector,
-            confidence=0.4,
-            needs_review=True,
-            reason="Optional field without a confident source.",
+        return self._blank_item(
+            field,
+            "Optional field left blank because no saved Profile value matched.",
         )
 
     def _blank_item(self, field: FormField, reason: str) -> FillPlanItem:

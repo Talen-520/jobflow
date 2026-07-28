@@ -130,6 +130,19 @@ test("popup owns fill controls without pairing or manual page connection", () =>
   assert.match(popupScript, /All fields on this page are complete/);
 });
 
+test("popup manual count excludes intentionally skipped optional fields", () => {
+  const { manualFieldCount } = require("../popup-state.js");
+
+  assert.equal(
+    manualFieldCount({
+      review_count: 3,
+      skipped_count: 4,
+      error_count: 2,
+    }),
+    5,
+  );
+});
+
 test("detected forms open the toolbar popup without injecting page controls", () => {
   const content = fs.readFileSync(path.join(extensionRoot, "content.js"), "utf8");
   const background = fs.readFileSync(path.join(extensionRoot, "background.js"), "utf8");
