@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "JobFlow Local Assistant",
-  "version": "0.8.12",
+  "version": "0.8.27",
   "description": "Detect supported job application forms and connect them to the local JobFlow desktop app.",
   "minimum_chrome_version": "116",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "debugger", "scripting", "storage", "tabs"],
   "host_permissions": [
     "http://127.0.0.1:8765/*",
     "https://*.greenhouse.io/*",

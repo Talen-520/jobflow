@@ -154,6 +154,15 @@ test("detected forms open the toolbar popup without injecting page controls", ()
   assert.match(background, /allow_ai_custom_fields: aiCustomFields/);
 });
 
+test("starting a fill closes the popup so native page input regains focus", () => {
+  const popupScript = fs.readFileSync(
+    path.join(extensionRoot, "popup.js"),
+    "utf8",
+  );
+
+  assert.match(popupScript, /globalThis\.close\(\)/);
+});
+
 test("extension start action runs one page and forwards the saved AI option", async () => {
   const listeners = [];
   const requests = [];
@@ -382,4 +391,30 @@ test("extension startup restores the active supported application tab", () => {
   assert.match(background, /injectIntoTab\(tab\.id\)/);
   assert.match(background, /chrome\.tabs\.onActivated/);
   assert.match(background, /jobflow\.report_state/);
+});
+
+test("Workday search submits with a native Chrome key event", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "manifest.json"), "utf8"),
+  );
+  const background = fs.readFileSync(
+    path.join(extensionRoot, "background.js"),
+    "utf8",
+  );
+  const content = fs.readFileSync(
+    path.join(extensionRoot, "content.js"),
+    "utf8",
+  );
+
+  assert.equal(manifest.permissions.includes("debugger"), true);
+  assert.match(content, /__jobflowWorkdayOption/);
+  assert.match(background, /Input\.insertText/);
+  assert.match(background, /Input\.dispatchKeyEvent/);
+  assert.match(background, /Input\.dispatchMouseEvent/);
+  assert.match(background, /Page\.bringToFront/);
+  assert.match(background, /document\.activeElement === control/);
+  assert.match(background, /setTimeout\(resolve, 300\)/);
+  assert.match(background, /type: "keyDown"/);
+  assert.match(background, /unmodifiedText: "\\r"/);
+  assert.match(background, /chrome\.debugger\.detach/);
 });

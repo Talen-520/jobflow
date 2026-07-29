@@ -412,6 +412,74 @@ def test_saved_work_authorization_fact_fills_without_per_run_review() -> None:
     assert "sponsorship" not in {item.field_id for item in plan.blocked_items}
 
 
+def test_saved_compliance_choices_fill_workday_application_questions() -> None:
+    form = FormSchema(
+        url=(
+            "https://workday.wd5.myworkdayjobs.com/en-US/Workday/job/"
+            "USA.VA.Reston/example/apply"
+        ),
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="authorized",
+                label="Are you authorized to work in the country where this job is located?",
+                type=FieldType.select,
+                required=True,
+                options=["Select One", "Yes", "No"],
+                selector="#authorized",
+                sensitive=True,
+            ),
+            FormField(
+                field_id="relocation",
+                label="Would you consider relocating for this role?",
+                type=FieldType.select,
+                required=True,
+                options=[
+                    "Select One",
+                    "Yes, I would consider relocating for this role",
+                    "No",
+                ],
+                selector="#relocation",
+                sensitive=True,
+            ),
+            FormField(
+                field_id="non-compete",
+                label=(
+                    "Are you subject to any non-compete or non-solicitation "
+                    "restrictions at your current or most recent employer?"
+                ),
+                type=FieldType.select,
+                required=True,
+                options=["Select One", "Yes", "No"],
+                selector="#non-compete",
+            ),
+        ],
+    )
+    profile = UserProfile(
+        work_authorization={"country": "US", "authorized": True},
+        preferences={
+            "relocation": True,
+            "non_compete_restrictions": False,
+        },
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    values = {item.field_id: item.value for item in plan.items}
+    assert values == {
+        "authorized": "Yes",
+        "relocation": "Yes, I would consider relocating for this role",
+        "non-compete": "No",
+    }
+    source_refs = {item.field_id: item.source_refs for item in plan.items}
+    assert source_refs == {
+        "authorized": ["profile.work_authorization.authorized"],
+        "relocation": ["profile.preferences.relocation"],
+        "non-compete": ["profile.preferences.non_compete_restrictions"],
+    }
+
+
 def test_sensitive_work_authorization_fact_can_fill_when_enabled() -> None:
     form = FormSchema(
         fields=[

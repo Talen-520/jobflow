@@ -476,9 +476,19 @@
     };
   }
 
-  function dispatchInput(element, blur = true) {
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
+  function dispatchInput(element, blur = true, change = blur) {
+    const InputEventConstructor =
+      element.ownerDocument?.defaultView?.InputEvent ||
+      globalObject.InputEvent;
+    const inputEvent = InputEventConstructor
+      ? new InputEventConstructor("input", {
+          bubbles: true,
+          data: clean(element.value),
+          inputType: "insertText",
+        })
+      : new Event("input", { bubbles: true });
+    element.dispatchEvent(inputEvent);
+    if (change) element.dispatchEvent(new Event("change", { bubbles: true }));
     if (blur) element.dispatchEvent(new Event("blur", { bubbles: true }));
   }
 
@@ -497,7 +507,7 @@
       : null;
     if (setter) setter.call(element, value);
     else element.value = value;
-    dispatchInput(element, blur);
+    dispatchInput(element, blur, blur);
   }
 
   function textValueMatches(actualValue, expectedValue) {
@@ -629,10 +639,48 @@
   }
 
   function workdaySearchTextMatches(actualValue, expectedValue) {
-    if (choiceTextMatches(actualValue, expectedValue)) return true;
+    return Number.isFinite(
+      workdaySearchMatchRank(actualValue, expectedValue),
+    );
+  }
+
+  function workdaySearchMatchRank(actualValue, expectedValue) {
     const actual = clean(actualValue).toLowerCase();
     const expected = clean(expectedValue).toLowerCase();
-    return expected.length >= 4 && actual.includes(expected);
+    if (!actual || !expected) return Number.POSITIVE_INFINITY;
+    if (actual === expected) return 0;
+    const normalizedActual = actual.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const normalizedExpected = expected.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    if (normalizedActual === normalizedExpected) return 1;
+    const escapedExpected = expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (
+      new RegExp(
+        `^[a-z0-9&.]{2,12}\\s*[-–—]\\s*${escapedExpected}$`,
+        "i",
+      ).test(actual)
+    ) {
+      return 2;
+    }
+    if (expected.length >= 4 && actual.endsWith(expected)) return 3;
+    if (expected.length >= 4 && actual.includes(expected)) return 4;
+    return Number.POSITIVE_INFINITY;
+  }
+
+  function bestWorkdaySearchOption(options, expectedValues) {
+    let best = null;
+    let bestRank = Number.POSITIVE_INFINITY;
+    for (const option of options) {
+      const actual =
+        option.getAttribute?.("data-automation-label") ||
+        option.textContent;
+      for (const expected of expectedValues) {
+        const rank = workdaySearchMatchRank(actual, expected);
+        if (rank >= bestRank) continue;
+        best = option;
+        bestRank = rank;
+      }
+    }
+    return best;
   }
 
   const DEGREE_ALIAS_GROUPS = [
@@ -766,9 +814,26 @@
     const optionSelector =
       '[role="option"], [id*="-option-"], .select__option, ' +
       '[data-automation-id="promptOption"]';
-    const candidates = roots.length
+    let candidates = roots.length
       ? roots.flatMap((root) => Array.from(root.querySelectorAll(optionSelector)))
       : Array.from(documentObject.querySelectorAll(optionSelector));
+    const multiselectId = clean(
+      element.getAttribute?.("data-uxi-multiselect-id"),
+    );
+    if (multiselectId) {
+      candidates = candidates.filter((candidate) => {
+        const leaf =
+          candidate.closest?.(
+            '[data-automation-id="promptLeafNode"], [data-uxi-widget-type="multiselectlistitem"]',
+          ) ||
+          candidate.querySelector?.(
+            '[data-automation-id="promptLeafNode"], [data-uxi-widget-type="multiselectlistitem"]',
+          );
+        return (
+          leaf?.getAttribute?.("data-uxi-multiselect-id") === multiselectId
+        );
+      });
+    }
     return candidates.filter((candidate) => {
       const view = candidate.ownerDocument?.defaultView;
       if (candidate.closest?.("[hidden], [aria-hidden='true']")) return false;
@@ -788,14 +853,17 @@
     expectedValues,
     attempts = 20,
     matches = choiceTextMatches,
+    selectMatch = null,
   ) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const options = visibleChoiceOptions(documentObject, element);
-      const match = options.find((candidate) =>
-        expectedValues.some((expected) =>
-          matches(candidate.textContent, expected),
-        ),
-      );
+      const match = selectMatch
+        ? selectMatch(options, expectedValues)
+        : options.find((candidate) =>
+            expectedValues.some((expected) =>
+              matches(candidate.textContent, expected),
+            ),
+          );
       if (match) return { match, options };
       if (attempt < attempts - 1) await waitForChoiceState(documentObject, 150);
     }
@@ -898,12 +966,50 @@
     return textValueMatches(control.value, expected);
   }
 
+  async function setWorkdaySearchValue(control, value, documentObject) {
+    const expected = clean(value);
+    control.focus?.();
+    control.select?.();
+    if (typeof globalObject.__jobflowWorkdaySearch === "function") {
+      const submitted = await globalObject.__jobflowWorkdaySearch(
+        control,
+        expected,
+      );
+      if (submitted && textValueMatches(control.value, expected)) {
+        return { submitted: true, written: true };
+      }
+      return { submitted: false, written: false };
+    }
+    try {
+      if (
+        documentObject.execCommand?.("insertText", false, expected) &&
+        textValueMatches(control.value, expected)
+      ) {
+        return { submitted: false, written: true };
+      }
+    } catch {
+      // Fall through to the native setter when insertText is unavailable.
+    }
+    setNativeValue(control, expected, false);
+    return {
+      submitted: false,
+      written: textValueMatches(control.value, expected),
+    };
+  }
+
   function setWorkdayNumericText(control, value) {
     const expected = clean(value);
     if (!expected) return true;
     if (!control || !/^\d+$/.test(expected)) return false;
     const normalized = String(Number(expected));
-    setNativeValue(control, normalized);
+    control.focus?.();
+    setNativeValue(control, normalized, false);
+    control.dispatchEvent(new Event("change", { bubbles: true }));
+    if (typeof control.blur === "function") {
+      control.blur();
+    } else {
+      control.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
     return Number(control.value) === Number(normalized);
   }
 
@@ -922,6 +1028,23 @@
         setWorkdayNumericText(months[index], month) &&
         setWorkdayNumericText(years[index], year)
       );
+    });
+  }
+
+  function setWorkdayEducationDateParts(row, startDate, endDate) {
+    const months = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionMonth-input"]') || [],
+    );
+    if (months.length > 0) {
+      return setWorkdayDateParts(row, startDate, endDate);
+    }
+    const years = Array.from(
+      row.querySelectorAll?.('[data-automation-id="dateSectionYear-input"]') || [],
+    );
+    return [startDate, endDate].every((date, index) => {
+      if (!clean(date)) return true;
+      const [year = ""] = clean(date).split("-");
+      return setWorkdayNumericText(years[index], year);
     });
   }
 
@@ -993,12 +1116,13 @@
     const container = workdaySearchContainer(control);
     return Array.from(
       container?.querySelectorAll?.('[data-automation-id="selectedItem"]') || [],
-    ).some((item) =>
-      workdaySearchTextMatches(
+    ).some((item) => {
+      const rank = workdaySearchMatchRank(
         item.getAttribute?.("data-automation-label") || item.textContent,
         expected,
-      ),
-    );
+      );
+      return rank <= 2;
+    });
   }
 
   function workdaySearchRequiresSelectedItem(control) {
@@ -1010,7 +1134,19 @@
     );
   }
 
-  function activateWorkdaySearchOption(match, documentObject) {
+  async function activateWorkdaySearchOption(
+    match,
+    documentObject,
+    control,
+  ) {
+    const label = clean(
+      match.getAttribute?.("data-automation-label") || match.textContent,
+    );
+    if (typeof globalObject.__jobflowWorkdayOption === "function") {
+      return Boolean(
+        await globalObject.__jobflowWorkdayOption(control, label),
+      );
+    }
     const option =
       match.closest?.('[role="option"]') ||
       match.parentElement?.closest?.('[role="option"]') ||
@@ -1041,6 +1177,7 @@
     if (target === radio && radio?.dispatchEvent) {
       radio.dispatchEvent(new Event("change", { bubbles: true }));
     }
+    return true;
   }
 
   function submitWorkdaySearch(control, documentObject) {
@@ -1052,14 +1189,25 @@
         ? new KeyboardEventConstructor(type, {
             key: "Enter",
             code: "Enter",
+            keyCode: 13,
+            which: 13,
+            charCode: type === "keypress" ? 13 : 0,
             bubbles: true,
             cancelable: true,
           })
         : new Event(type, { bubbles: true, cancelable: true });
-      if (!KeyboardEventConstructor) {
-        Object.defineProperties(event, {
-          key: { value: "Enter" },
-          code: { value: "Enter" },
+      const legacyKeyboardValues = {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        charCode: type === "keypress" ? 13 : 0,
+      };
+      for (const [property, value] of Object.entries(legacyKeyboardValues)) {
+        if (event[property] === value) continue;
+        Object.defineProperty(event, property, {
+          configurable: true,
+          value,
         });
       }
       control.dispatchEvent(event);
@@ -1087,10 +1235,18 @@
     ) {
       return true;
     }
-    control.focus?.();
-    setNativeValue(control, expected, false);
+    const searchValue = await setWorkdaySearchValue(
+      control,
+      expected,
+      documentObject,
+    );
+    if (!searchValue.written) {
+      return false;
+    }
     await waitForChoiceState(documentObject, 160);
-    submitWorkdaySearch(control, documentObject);
+    if (!searchValue.submitted) {
+      submitWorkdaySearch(control, documentObject);
+    }
     await waitForChoiceState(documentObject, 300);
     const { match } = await waitForMatchingChoice(
       documentObject,
@@ -1098,9 +1254,12 @@
       [expected.toLowerCase()],
       20,
       workdaySearchTextMatches,
+      bestWorkdaySearchOption,
     );
     if (!match) return false;
-    activateWorkdaySearchOption(match, documentObject);
+    if (!(await activateWorkdaySearchOption(match, documentObject, control))) {
+      return false;
+    }
     await waitForChoiceState(documentObject, 300);
     if (!requiresSelectedItem) return true;
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -1161,11 +1320,6 @@
         const hasDateControls =
           Array.from(
             row.querySelectorAll?.(
-              '[data-automation-id="dateSectionMonth-input"]',
-            ) || [],
-          ).length > 0 &&
-          Array.from(
-            row.querySelectorAll?.(
               '[data-automation-id="dateSectionYear-input"]',
             ) || [],
           ).length > 0;
@@ -1199,7 +1353,11 @@
           documentObject,
         );
         const datesVerified = hasDateControls
-          ? setWorkdayDateParts(row, entry.start_date, entry.end_date)
+          ? setWorkdayEducationDateParts(
+              row,
+              entry.start_date,
+              entry.end_date,
+            )
           : true;
         const statusVerified = statusControl
           ? await setWorkdayChoice(statusControl, entry.status, documentObject)

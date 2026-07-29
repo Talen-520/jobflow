@@ -491,7 +491,14 @@ export function ProfilePage({
             </div>
             <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Are you subject to a non-compete or non-solicitation agreement that could affect employment?"
+                label="Would you consider relocating for this role?"
+                value={profilePreferenceBoolean(profile, "relocation")}
+                onChange={(value) => updatePreference("relocation", value)}
+              />
+            </div>
+            <div className="col-span-2 max-[760px]:col-span-1">
+              <NullableBooleanSelect
+                label="Are you subject to any non-compete or non-solicitation restrictions at your current or most recent employer?"
                 value={profilePreferenceBoolean(profile, "non_compete_restrictions")}
                 onChange={(value) =>
                   updatePreference("non_compete_restrictions", value)

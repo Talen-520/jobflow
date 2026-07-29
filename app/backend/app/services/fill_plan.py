@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 from app.models.schemas import (
     BlockedItem,
@@ -60,7 +61,7 @@ class FillPlanService:
         tools = ProfileTools(profile, preferences)
         plan = FillPlan()
         for field in form.fields:
-            item = self._map_field(field, tools, preferences)
+            item = self._map_field(field, tools, preferences, form.url)
             if isinstance(item, BlockedItem):
                 plan.blocked_items.append(item)
             else:
@@ -68,7 +69,11 @@ class FillPlanService:
         return plan
 
     def _map_field(
-        self, field: FormField, tools: ProfileTools, preferences: Preferences
+        self,
+        field: FormField,
+        tools: ProfileTools,
+        preferences: Preferences,
+        form_url: str,
     ) -> FillPlanItem | BlockedItem:
         label = self._field_text(field)
         workday_repeater = self._map_workday_repeater(field, tools, label)
@@ -84,7 +89,12 @@ class FillPlanService:
         if preference_item:
             return preference_item
         if field.sensitive or self._is_sensitive(label):
-            sensitive_item = self._map_sensitive_field(field, tools, label)
+            sensitive_item = self._map_sensitive_field(
+                field,
+                tools,
+                label,
+                form_url,
+            )
             if sensitive_item:
                 return sensitive_item
             return BlockedItem(
@@ -361,10 +371,18 @@ class FillPlanService:
         return None
 
     def _map_sensitive_field(
-        self, field: FormField, tools: ProfileTools, label: str
+        self,
+        field: FormField,
+        tools: ProfileTools,
+        label: str,
+        form_url: str,
     ) -> FillPlanItem | None:
         if "sponsorship" in label or "visa" in label:
-            if not self._work_authorization_country_matches(label, tools):
+            if not self._work_authorization_country_matches(
+                label,
+                tools,
+                form_url,
+            ):
                 return None
             result = tools.get_profile_field("work_authorization.requires_sponsorship")
             if result:
@@ -379,7 +397,11 @@ class FillPlanService:
                 "eligible to work",
             ]
         ):
-            if not self._work_authorization_country_matches(label, tools):
+            if not self._work_authorization_country_matches(
+                label,
+                tools,
+                form_url,
+            ):
                 return None
             result = tools.get_profile_field("work_authorization.authorized")
             if result:
@@ -387,7 +409,10 @@ class FillPlanService:
         return None
 
     def _work_authorization_country_matches(
-        self, label: str, tools: ProfileTools
+        self,
+        label: str,
+        tools: ProfileTools,
+        form_url: str,
     ) -> bool:
         result = tools.get_profile_field("work_authorization.country")
         if result is None:
@@ -406,8 +431,17 @@ class FillPlanService:
         if "country" in label and any(
             term in label for term in ["applying", "position", "hired", "job"]
         ):
-            return False
+            job_country = self._job_country_from_url(form_url)
+            return bool(job_country) and saved_country == job_country
         return bool(saved_country)
+
+    def _job_country_from_url(self, value: str) -> str:
+        normalized = unquote(str(value or "")).lower()
+        if re.search(r"/job/usa(?:[./,_-]|$)|/job/us(?:[./,_-]|$)", normalized):
+            return "US"
+        if re.search(r"/job/canada(?:[./,_-]|$)|/job/ca(?:[./,_-]|$)", normalized):
+            return "CA"
+        return ""
 
     def _normalize_country(self, value: str) -> str:
         normalized = re.sub(r"[^a-z]", "", str(value).lower())
@@ -463,6 +497,18 @@ class FillPlanService:
                 review_required=False,
             )
         if self._is_relocation(label):
+            if preferences.relocation_policy != "leave_blank":
+                for path in [
+                    "preferences.relocation",
+                    "preferences.relocation_answer",
+                ]:
+                    result = tools.get_profile_field(path)
+                    if result:
+                        return self._item(
+                            field,
+                            result,
+                            "Exact relocation choice saved in Profile.",
+                        )
             return self._map_policy_value(
                 field=field,
                 tools=tools,
@@ -678,6 +724,14 @@ class FillPlanService:
             for option in options:
                 if option.strip().lower() == preferred_option:
                     return option
+        answer = "yes" if value else "no"
+        descriptive = [
+            option
+            for option in options
+            if re.match(rf"^{answer}\b", option.strip(), flags=re.IGNORECASE)
+        ]
+        if len(descriptive) == 1:
+            return descriptive[0]
         return None
 
     def _text_option(self, options: list[str], value: str) -> str | None:

@@ -92,7 +92,7 @@ is implemented and undergoing release QA:
   fields, normalized country and state/province dropdowns, state-aware city
   suggestions with unrestricted city text entry and icon-triggered helper text,
   company, LinkedIn URL, GitHub URL, portfolio URL, US work authorization, visa
-  sponsorship, non-compete status, SMS consent, university, opportunity source,
+  sponsorship, relocation choice, non-compete status, SMS consent, university, opportunity source,
   gender, race, disability status, veteran status, AI answer context, and
   structured repeatable work-experience, education, and certification records.
   Work Experience captures company, location, calendar-selected dates,

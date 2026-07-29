@@ -3,6 +3,30 @@
   if (globalThis.__jobflowContentVersion === contentVersion) return;
   globalThis.__jobflowContentVersion = contentVersion;
 
+  globalThis.__jobflowWorkdaySearch = async (control, value) => {
+    const response = await chrome.runtime.sendMessage({
+      type: "jobflow.workday_search",
+      control_id: control?.id || "",
+      value: String(value || ""),
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Workday search failed.");
+    }
+    return true;
+  };
+
+  globalThis.__jobflowWorkdayOption = async (control, value) => {
+    const response = await chrome.runtime.sendMessage({
+      type: "jobflow.workday_option",
+      control_id: control?.id || "",
+      value: String(value || ""),
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Workday option selection failed.");
+    }
+    return true;
+  };
+
   function snapshot() {
     const form = JobFlowDOM.extractForm(document, location.href);
     const rawHtml = document.documentElement?.outerHTML || "";

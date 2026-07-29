@@ -1242,13 +1242,24 @@ test("Workday repeat action fills a structured work experience row", async () =>
   });
   const makeNumericInput = () => {
     let value = "";
+    const lifecycle = [];
     return {
       ...makeInput(),
+      lifecycle,
       get value() {
         return value;
       },
       set value(nextValue) {
         value = /^0\d$/.test(String(nextValue)) ? "" : String(nextValue);
+      },
+      focus() {
+        lifecycle.push("focus");
+      },
+      dispatchEvent(event) {
+        lifecycle.push(event.type);
+      },
+      blur() {
+        lifecycle.push("blur");
       },
     };
   };
@@ -1332,6 +1343,9 @@ test("Workday repeat action fills a structured work experience row", async () =>
   assert.equal(controls.current.checked, false);
   assert.deepEqual(controls.months.map((control) => control.value), ["1", "6"]);
   assert.deepEqual(controls.years.map((control) => control.value), ["2022", "2024"]);
+  for (const control of [...controls.months, ...controls.years]) {
+    assert.deepEqual(control.lifecycle, ["focus", "input", "change", "blur"]);
+  }
   assert.equal(controls.description.value, "Operated production services.");
 });
 
@@ -1469,55 +1483,92 @@ test("Workday repeat action selects structured education values", async () => {
   assert.equal(educationStatus.value, "graduated");
 });
 
-test("Workday school commits a prompt option as a selected item", async () => {
-  let selectedItems = [];
-  let searchSubmitted = false;
-  const promptSearchButton = {
-    click() {
-      searchSubmitted = true;
-    },
+test("Workday scopes and ranks school and field-of-study prompt options", async () => {
+  const schoolId = "school-multiselect";
+  const majorId = "major-multiselect";
+  let activeSearch = "";
+  let activeControl = null;
+  const searchQueries = new Map([
+    [schoolId, ""],
+    [majorId, ""],
+  ]);
+  const selectedItems = new Map([
+    [schoolId, []],
+    [majorId, []],
+  ]);
+  const makeControl = (id, domId) => {
+    const inputContainer = {
+      querySelector() {
+        return null;
+      },
+    };
+    const selectedContainer = {
+      parentElement: null,
+      get textContent() {
+        const count = selectedItems.get(id).length;
+        return count ? `${count} item selected` : "0 items selected";
+      },
+      querySelectorAll(selector) {
+        return selector === '[data-automation-id="selectedItem"]'
+          ? selectedItems.get(id)
+          : [];
+      },
+    };
+    const control = {
+      tagName: "INPUT",
+      id: domId,
+      value: "",
+      parentElement: selectedContainer,
+      getAttribute(name) {
+        return {
+          "data-uxi-multiselect-id": id,
+          "data-uxi-widget-type": "selectinput",
+        }[name] || "";
+      },
+      closest(selector) {
+        return selector === '[data-automation-id="multiselectInputContainer"]'
+          ? inputContainer
+          : null;
+      },
+      dispatchEvent(event) {
+        if (event.type === "change") {
+          searchQueries.set(id, "");
+        }
+        if (
+          event.type === "keydown" &&
+          event.key === "Enter" &&
+          event.keyCode === 13 &&
+          event.which === 13
+        ) {
+          activeSearch = id;
+        }
+      },
+      focus() {
+        activeControl = control;
+      },
+      select() {},
+    };
+    return control;
   };
-  const searchContainer = {
-    querySelector(selector) {
-      return selector === '[data-automation-id="promptSearchButton"]'
-        ? promptSearchButton
-        : null;
-    },
-  };
-  const school = {
-    tagName: "INPUT",
-    value: "Queens College",
-    parentElement: null,
-    getAttribute(name) {
-      return name === "data-automation-id" ? "searchBox" : "";
-    },
-    closest(selector) {
-      return selector === '[data-automation-id="multiselectInputContainer"]'
-        ? searchContainer
-        : null;
-    },
-    dispatchEvent() {},
-    focus() {},
-  };
+  const school = makeControl(schoolId, "education-1--school");
+  const fieldOfStudy = makeControl(
+    majorId,
+    "education-1--fieldOfStudy",
+  );
   const row = {
     parentElement: null,
-    get textContent() {
-      return selectedItems.length
-        ? `${selectedItems.length} item selected`
-        : "Minimized";
-    },
     querySelector(selector) {
-      return selector === '[data-automation-id="searchBox"]' ? school : null;
+      return {
+        '[id$="--school"]': school,
+        '[data-automation-id="searchBox"]': school,
+        '[id$="--fieldOfStudy"]': fieldOfStudy,
+      }[selector] || null;
     },
     querySelectorAll(selector) {
       if (selector === "button") return [{ textContent: "Delete" }];
-      if (selector === '[data-automation-id="selectedItem"]') {
-        return selectedItems;
-      }
       return [];
     },
   };
-  school.parentElement = row;
   const section = {
     querySelectorAll(selector) {
       if (selector === "button") return [];
@@ -1528,65 +1579,134 @@ test("Workday school commits a prompt option as a selected item", async () => {
     },
   };
   row.parentElement = section;
-  const radio = {
-    click() {},
-    dispatchEvent() {},
-  };
-  const optionContainer = {
-    click() {
-      selectedItems = [
-        {
-          textContent: "CUNY - Queens College",
-          getAttribute() {
-            return "";
+  const makePromptOption = (label, id) => {
+    const leaf = {
+      getAttribute(name) {
+        return name === "data-uxi-multiselect-id" ? id : "";
+      },
+    };
+    const optionContainer = {
+      click() {
+        selectedItems.set(id, [
+          {
+            textContent: label,
+            getAttribute() {
+              return "";
+            },
           },
-        },
-      ];
-      school.value = "";
-    },
-    dispatchEvent() {},
-    querySelector(selector) {
-      return selector.includes('input[type="radio"]') ? radio : null;
-    },
+        ]);
+        if (id === schoolId) school.value = "";
+        if (id === majorId) fieldOfStudy.value = "";
+      },
+      dispatchEvent() {},
+      querySelector(selector) {
+        if (
+          selector.includes('[data-automation-id="promptLeafNode"]') ||
+          selector.includes('[data-uxi-widget-type="multiselectlistitem"]')
+        ) {
+          return leaf;
+        }
+        return null;
+      },
+    };
+    return {
+      textContent: label,
+      ownerDocument: null,
+      getClientRects() {
+        return [{}];
+      },
+      closest(selector) {
+        if (selector === '[data-automation-id="selectedItem"]') return null;
+        if (selector === '[role="option"]') return optionContainer;
+        if (
+          selector.includes('[data-automation-id="promptLeafNode"]') ||
+          selector.includes('[data-uxi-widget-type="multiselectlistitem"]')
+        ) {
+          return leaf;
+        }
+        return null;
+      },
+    };
   };
-  const promptOption = {
-    textContent: "CUNY - Queens College",
-    dataset: { automationLabel: "CUNY - Queens College" },
-    ownerDocument: null,
-    getClientRects() {
-      return [{}];
-    },
-    closest(selector) {
-      if (selector === '[data-automation-id="selectedItem"]') return null;
-      return selector === '[role="option"]' ? optionContainer : null;
-    },
-  };
+  const options = [
+    makePromptOption("CCNY Queens College", schoolId),
+    makePromptOption("CUNY - Queens College", schoolId),
+    makePromptOption("Computer Science", schoolId),
+    makePromptOption("Computer and Information Science", majorId),
+    makePromptOption("Computer Science", majorId),
+  ];
   const documentObject = {
     defaultView: { setTimeout },
+    execCommand() {
+      return false;
+    },
     querySelector() {
       return section;
     },
     querySelectorAll(selector) {
-      return searchSubmitted &&
+      return activeSearch &&
+        searchQueries.get(activeSearch) &&
         selector.includes('[data-automation-id="promptOption"]')
-        ? [promptOption]
+        ? options
         : [];
     },
   };
 
-  const verified = await applyWorkdayRepeater(
-    {
-      field_id: "jobflow-workday-education",
-      selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
-      value: [{ school: "Queens College" }],
-    },
-    documentObject,
-  );
+  globalThis.__jobflowWorkdaySearch = async (control, value) => {
+    control.value = value;
+    activeSearch = control.getAttribute("data-uxi-multiselect-id");
+    searchQueries.set(activeSearch, value);
+    return true;
+  };
+  const nativeOptionClicks = [];
+  globalThis.__jobflowWorkdayOption = async (control, label) => {
+    const id = control.getAttribute("data-uxi-multiselect-id");
+    nativeOptionClicks.push({ id, label });
+    selectedItems.set(id, [
+      {
+        textContent: label,
+        getAttribute() {
+          return "";
+        },
+      },
+    ]);
+    control.value = "";
+    return true;
+  };
+  let verified;
+  try {
+    verified = await applyWorkdayRepeater(
+      {
+        field_id: "jobflow-workday-education",
+        selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+        value: [
+          {
+            school: "Queens College",
+            field_of_study: "Computer Science",
+          },
+        ],
+      },
+      documentObject,
+    );
+  } finally {
+    delete globalThis.__jobflowWorkdaySearch;
+    delete globalThis.__jobflowWorkdayOption;
+  }
 
   assert.equal(verified, true);
-  assert.equal(selectedItems.length, 1);
-  assert.equal(selectedItems[0].textContent, "CUNY - Queens College");
+  assert.deepEqual(nativeOptionClicks, [
+    { id: schoolId, label: "CUNY - Queens College" },
+    { id: majorId, label: "Computer Science" },
+  ]);
+  assert.equal(selectedItems.get(schoolId).length, 1);
+  assert.equal(
+    selectedItems.get(schoolId)[0].textContent,
+    "CUNY - Queens College",
+  );
+  assert.equal(selectedItems.get(majorId).length, 1);
+  assert.equal(selectedItems.get(majorId)[0].textContent, "Computer Science");
   assert.equal(school.value, "");
+  assert.equal(fieldOfStudy.value, "");
 });
 
 test("NVIDIA Workday fills a plain schoolName input directly", async () => {
@@ -1605,6 +1725,7 @@ test("NVIDIA Workday fills a plain schoolName input directly", async () => {
     "data-automation-id": "searchBox",
     "data-uxi-multiselect-id": "field-of-study",
   });
+  const educationYears = [makeInput(), makeInput()];
   let row = null;
   const section = {
     querySelectorAll(selector) {
@@ -1628,7 +1749,11 @@ test("NVIDIA Workday fills a plain schoolName input directly", async () => {
           }[selector] || null;
         },
         querySelectorAll(selector) {
-          return selector === "button" ? [{ textContent: "Delete" }] : [];
+          if (selector === "button") return [{ textContent: "Delete" }];
+          if (selector === '[data-automation-id="dateSectionYear-input"]') {
+            return educationYears;
+          }
+          return [];
         },
       };
       school.parentElement = row;
@@ -1649,7 +1774,13 @@ test("NVIDIA Workday fills a plain schoolName input directly", async () => {
     {
       field_id: "jobflow-workday-education",
       selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
-      value: [{ school: "Queens College" }],
+      value: [
+        {
+          school: "Queens College",
+          start_date: "2018-08",
+          end_date: "2022-05",
+        },
+      ],
     },
     documentObject,
   );
@@ -1657,6 +1788,10 @@ test("NVIDIA Workday fills a plain schoolName input directly", async () => {
   assert.equal(verified, true);
   assert.equal(school.value, "Queens College");
   assert.equal(fieldOfStudy.value, "");
+  assert.deepEqual(
+    educationYears.map((control) => control.value),
+    ["2018", "2022"],
+  );
 });
 
 test("Workday repeat action keeps already selected education values", async () => {

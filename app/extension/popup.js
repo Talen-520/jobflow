@@ -83,7 +83,10 @@ function render(status) {
     : status.fillResult
       ? "Fill again"
       : "Start filling";
-  fillStatusElement.textContent = status.fillResult ? "" : status.fillMessage || "";
+  const firstError = status.fillResult?.items?.find(
+    (item) => item.status === "error",
+  )?.reason;
+  fillStatusElement.textContent = firstError || (status.fillResult ? "" : status.fillMessage || "");
   renderCompletion(status.fillResult);
 }
 
@@ -150,20 +153,12 @@ if (
     }
   });
 
-  startFillElement.addEventListener("click", async () => {
+  startFillElement.addEventListener("click", () => {
     startFillElement.disabled = true;
     startFillElement.textContent = "Filling...";
     fillStatusElement.textContent = "Preparing this page...";
-    try {
-      const response = await chrome.runtime.sendMessage({ type: "jobflow.start_fill" });
-      if (!response?.ok) throw new Error(response?.error || "Unable to fill this page.");
-      render(response.status);
-    } catch (error) {
-      startFillElement.disabled = false;
-      startFillElement.textContent = "Start filling";
-      fillStatusElement.textContent =
-        error instanceof Error ? error.message : "Unable to fill this page.";
-    }
+    void chrome.runtime.sendMessage({ type: "jobflow.start_fill" }).catch(() => {});
+    globalThis.close();
   });
 
   void refresh();

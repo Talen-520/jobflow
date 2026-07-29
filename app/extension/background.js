@@ -510,6 +510,200 @@ function frameForForm(form) {
   return atsMatch?.frameId ?? 0;
 }
 
+async function runWorkdaySearch(message, sender) {
+  if (
+    sender.tab?.id == null ||
+    sender.tab.id !== activeTabId ||
+    !/\.myworkdayjobs\.com$|\.workdayjobs\.com$/i.test(
+      new URL(sender.url || sender.tab.url || "").hostname,
+    )
+  ) {
+    throw new Error("Workday search is not available for this frame.");
+  }
+  const controlId = String(message.control_id || "").trim();
+  const value = String(message.value || "").replace(/\s+/g, " ").trim();
+  if (!controlId || !value) throw new Error("Workday search value is missing.");
+
+  const debuggee = { tabId: sender.tab.id };
+  let debuggerAttached = false;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    debuggerAttached = true;
+    await chrome.debugger.sendCommand(debuggee, "Page.bringToFront");
+    const [focusExecution] = await chrome.scripting.executeScript({
+      target: {
+        tabId: sender.tab.id,
+        frameIds: [sender.frameId ?? 0],
+      },
+      world: "MAIN",
+      func: (inputId) => {
+        const control = document.getElementById(inputId);
+        if (!(control instanceof HTMLInputElement)) return false;
+        control.click();
+        control?.focus();
+        control.select();
+        return document.activeElement === control;
+      },
+      args: [controlId],
+    });
+    if (!focusExecution?.result) {
+      throw new Error("Workday search input could not receive keyboard focus.");
+    }
+    await chrome.debugger.sendCommand(debuggee, "Input.insertText", {
+      text: value,
+    });
+    const [inputExecution] = await chrome.scripting.executeScript({
+      target: {
+        tabId: sender.tab.id,
+        frameIds: [sender.frameId ?? 0],
+      },
+      world: "MAIN",
+      func: (inputId, expected) => {
+        const control = document.getElementById(inputId);
+        return (
+          control instanceof HTMLInputElement &&
+          control.value === expected &&
+          document.activeElement === control
+        );
+      },
+      args: [controlId, value],
+    });
+    if (!inputExecution?.result) {
+      throw new Error("Workday search input did not accept the Profile value.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", {
+      type: "keyDown",
+      modifiers: 0,
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      text: "\r",
+      unmodifiedText: "\r",
+      location: 0,
+      isKeypad: false,
+    });
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      modifiers: 0,
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      location: 0,
+    });
+  } finally {
+    if (debuggerAttached) {
+      await chrome.debugger.detach(debuggee).catch(() => {});
+    }
+  }
+  return { ok: true, value };
+}
+
+async function runWorkdayOption(message, sender) {
+  if (
+    sender.tab?.id == null ||
+    sender.tab.id !== activeTabId ||
+    !/\.myworkdayjobs\.com$|\.workdayjobs\.com$/i.test(
+      new URL(sender.url || sender.tab.url || "").hostname,
+    )
+  ) {
+    throw new Error("Workday option selection is not available for this frame.");
+  }
+  const controlId = String(message.control_id || "").trim();
+  const value = String(message.value || "").replace(/\s+/g, " ").trim();
+  if (!controlId || !value) throw new Error("Workday option value is missing.");
+
+  const debuggee = { tabId: sender.tab.id };
+  let debuggerAttached = false;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    debuggerAttached = true;
+    await chrome.debugger.sendCommand(debuggee, "Page.bringToFront");
+    const [execution] = await chrome.scripting.executeScript({
+      target: {
+        tabId: sender.tab.id,
+        frameIds: [sender.frameId ?? 0],
+      },
+      world: "MAIN",
+      func: (inputId, expected) => {
+        const normalize = (candidate) =>
+          String(candidate || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const control = document.getElementById(inputId);
+        const multiselectId = control?.getAttribute("data-uxi-multiselect-id");
+        if (!(control instanceof HTMLInputElement) || !multiselectId) {
+          return { ok: false };
+        }
+        const options = [
+          ...document.querySelectorAll(
+            '[data-automation-id="promptOption"], [role="option"]',
+          ),
+        ];
+        const seen = new Set();
+        const match = options
+          .map((candidate) => candidate.closest?.('[role="option"]') || candidate)
+          .filter((candidate) => {
+            if (seen.has(candidate)) return false;
+            seen.add(candidate);
+            const leaf =
+              candidate.closest?.(
+                '[data-automation-id="promptLeafNode"], [data-uxi-widget-type="multiselectlistitem"]',
+              ) ||
+              candidate.querySelector?.(
+                '[data-automation-id="promptLeafNode"], [data-uxi-widget-type="multiselectlistitem"]',
+              );
+            return (
+              leaf?.getAttribute?.("data-uxi-multiselect-id") === multiselectId
+            );
+          })
+          .find(
+            (candidate) =>
+              normalize(
+                candidate.getAttribute?.("data-automation-label") ||
+                  candidate.textContent,
+              ) === normalize(expected),
+          );
+        if (!match) return { ok: false };
+        match.scrollIntoView({ block: "nearest", inline: "nearest" });
+        const rect = match.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return { ok: false };
+        return {
+          ok: true,
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+      },
+      args: [controlId, value],
+    });
+    if (!execution?.result?.ok) {
+      throw new Error(`Workday option "${value}" was not available.`);
+    }
+    const point = {
+      x: execution.result.x,
+      y: execution.result.y,
+      button: "left",
+      clickCount: 1,
+    };
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y,
+    });
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...point,
+    });
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      ...point,
+    });
+  } finally {
+    if (debuggerAttached) {
+      await chrome.debugger.detach(debuggee).catch(() => {});
+    }
+  }
+  return { ok: true, value };
+}
+
 async function handleCommand(message) {
   const { command, payload = {}, request_id: requestId } = message;
   try {
@@ -556,6 +750,34 @@ async function handleCommand(message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "jobflow.workday_search") {
+    runWorkdaySearch(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Workday search failed.",
+        }),
+      );
+    return true;
+  }
+  if (message?.type === "jobflow.workday_option") {
+    runWorkdayOption(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Workday option selection failed.",
+        }),
+      );
+    return true;
+  }
   if (message?.type === "jobflow.frame_ready") {
     if (adoptDetectedForm(message, sender)) {
       sendResponse({ ok: true, detected: true, status: connectionStatus() });
