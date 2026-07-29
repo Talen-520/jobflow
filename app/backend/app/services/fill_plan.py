@@ -144,9 +144,12 @@ class FillPlanService:
                 if fact.title or fact.organization or fact.body
             ]
         elif field.field_id == "jobflow-workday-education":
+            saved_university = str(
+                profile.preferences.get("university") or ""
+            ).strip()
             values = [
                 {
-                    "school": fact.title,
+                    "school": fact.title or saved_university,
                     "degree": fact.degree,
                     "field_of_study": fact.body,
                     "start_date": self._workday_month(fact.start_date),
@@ -175,6 +178,18 @@ class FillPlanService:
                     or fact.education_status
                 )
             ]
+            if saved_university and any(
+                not fact.title
+                and (
+                    fact.degree
+                    or fact.body
+                    or fact.start_date
+                    or fact.end_date
+                    or fact.education_status
+                )
+                for fact in profile.education
+            ):
+                source_refs.append("profile.preferences.university")
         elif field.field_id == "jobflow-workday-certifications":
             values = [
                 {

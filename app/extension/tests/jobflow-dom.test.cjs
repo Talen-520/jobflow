@@ -1472,6 +1472,18 @@ test("Workday repeat action selects structured education values", async () => {
 test("Workday school commits a prompt option as a selected item", async () => {
   let selectedItems = [];
   let searchSubmitted = false;
+  const promptSearchButton = {
+    click() {
+      searchSubmitted = true;
+    },
+  };
+  const searchContainer = {
+    querySelector(selector) {
+      return selector === '[data-automation-id="promptSearchButton"]'
+        ? promptSearchButton
+        : null;
+    },
+  };
   const school = {
     tagName: "INPUT",
     value: "Queens College",
@@ -1479,17 +1491,20 @@ test("Workday school commits a prompt option as a selected item", async () => {
     getAttribute(name) {
       return name === "data-automation-id" ? "searchBox" : "";
     },
-    dispatchEvent(event) {
-      if (event.type === "keydown" && event.key === "Enter") {
-        searchSubmitted = true;
-      }
+    closest(selector) {
+      return selector === '[data-automation-id="multiselectInputContainer"]'
+        ? searchContainer
+        : null;
     },
+    dispatchEvent() {},
     focus() {},
   };
   const row = {
     parentElement: null,
     get textContent() {
-      return `${selectedItems.length} items selected`;
+      return selectedItems.length
+        ? `${selectedItems.length} item selected`
+        : "Minimized";
     },
     querySelector(selector) {
       return selector === '[data-automation-id="searchBox"]' ? school : null;
@@ -1514,6 +1529,10 @@ test("Workday school commits a prompt option as a selected item", async () => {
   };
   row.parentElement = section;
   const radio = {
+    click() {},
+    dispatchEvent() {},
+  };
+  const optionContainer = {
     click() {
       selectedItems = [
         {
@@ -1525,10 +1544,6 @@ test("Workday school commits a prompt option as a selected item", async () => {
       ];
       school.value = "";
     },
-    dispatchEvent() {},
-  };
-  const optionContainer = {
-    click() {},
     dispatchEvent() {},
     querySelector(selector) {
       return selector.includes('input[type="radio"]') ? radio : null;
@@ -1572,6 +1587,76 @@ test("Workday school commits a prompt option as a selected item", async () => {
   assert.equal(selectedItems.length, 1);
   assert.equal(selectedItems[0].textContent, "CUNY - Queens College");
   assert.equal(school.value, "");
+});
+
+test("NVIDIA Workday fills a plain schoolName input directly", async () => {
+  const makeInput = (attributes = {}) => ({
+    tagName: "INPUT",
+    value: "",
+    parentElement: null,
+    getAttribute(name) {
+      return attributes[name] || "";
+    },
+    dispatchEvent() {},
+    focus() {},
+  });
+  const school = makeInput({ name: "schoolName" });
+  const fieldOfStudy = makeInput({
+    "data-automation-id": "searchBox",
+    "data-uxi-multiselect-id": "field-of-study",
+  });
+  let row = null;
+  const section = {
+    querySelectorAll(selector) {
+      if (selector === "button") return [addButton];
+      if (selector.includes("[role='heading']") && row) {
+        return [{ textContent: "Education 1", parentElement: row }];
+      }
+      return [];
+    },
+  };
+  const addButton = {
+    textContent: "Add",
+    click() {
+      row = {
+        parentElement: section,
+        querySelector(selector) {
+          return {
+            '[name="schoolName"]': school,
+            '[data-automation-id="searchBox"]': fieldOfStudy,
+            '[id$="--fieldOfStudy"]': fieldOfStudy,
+          }[selector] || null;
+        },
+        querySelectorAll(selector) {
+          return selector === "button" ? [{ textContent: "Delete" }] : [];
+        },
+      };
+      school.parentElement = row;
+      fieldOfStudy.parentElement = row;
+    },
+  };
+  const documentObject = {
+    defaultView: { setTimeout },
+    querySelector() {
+      return section;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const verified = await applyWorkdayRepeater(
+    {
+      field_id: "jobflow-workday-education",
+      selector: '[data-jobflow-workday-repeater="jobflow-workday-education"]',
+      value: [{ school: "Queens College" }],
+    },
+    documentObject,
+  );
+
+  assert.equal(verified, true);
+  assert.equal(school.value, "Queens College");
+  assert.equal(fieldOfStudy.value, "");
 });
 
 test("Workday repeat action keeps already selected education values", async () => {

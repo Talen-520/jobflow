@@ -1001,6 +1001,15 @@
     );
   }
 
+  function workdaySearchRequiresSelectedItem(control) {
+    return Boolean(
+      workdaySearchContainer(control) ||
+        control.getAttribute?.("data-automation-id") === "searchBox" ||
+        control.getAttribute?.("data-uxi-multiselect-id") ||
+        control.closest?.('[data-automation-id="multiselectInputContainer"]'),
+    );
+  }
+
   function activateWorkdaySearchOption(match, documentObject) {
     const option =
       match.closest?.('[role="option"]') ||
@@ -1013,7 +1022,7 @@
       match.querySelector?.(
         'input[type="radio"], [data-automation-id="radioBtn"]',
       );
-    const target = radio || option;
+    const target = option || radio || match;
     const MouseEventConstructor =
       documentObject.defaultView?.MouseEvent ||
       globalObject.MouseEvent ||
@@ -1029,7 +1038,7 @@
       );
     }
     target.click?.();
-    if (radio?.dispatchEvent) {
+    if (target === radio && radio?.dispatchEvent) {
       radio.dispatchEvent(new Event("change", { bubbles: true }));
     }
   }
@@ -1038,7 +1047,7 @@
     const KeyboardEventConstructor =
       documentObject.defaultView?.KeyboardEvent ||
       globalObject.KeyboardEvent;
-    for (const type of ["keydown", "keyup"]) {
+    for (const type of ["keydown", "keypress", "keyup"]) {
       const event = KeyboardEventConstructor
         ? new KeyboardEventConstructor(type, {
             key: "Enter",
@@ -1055,13 +1064,17 @@
       }
       control.dispatchEvent(event);
     }
+    control
+      .closest?.('[data-automation-id="multiselectInputContainer"]')
+      ?.querySelector?.('[data-automation-id="promptSearchButton"]')
+      ?.click?.();
   }
 
   async function setWorkdaySearchChoice(control, value, documentObject) {
     const expected = clean(value);
     if (!expected) return true;
     if (!control) return false;
-    const requiresSelectedItem = Boolean(workdaySearchContainer(control));
+    const requiresSelectedItem = workdaySearchRequiresSelectedItem(control);
     if (
       requiresSelectedItem &&
       workdaySelectedChoiceMatches(control, expected)
@@ -1156,11 +1169,25 @@
               '[data-automation-id="dateSectionYear-input"]',
             ) || [],
           ).length > 0;
-        const schoolVerified = await setWorkdaySearchChoice(
-          row.querySelector?.('[data-automation-id="searchBox"]'),
-          entry.school,
-          documentObject,
-        );
+        const directSchoolControl = [
+          '[name="schoolName"]',
+          '[id$="--schoolName"]',
+        ]
+          .map((selector) => row.querySelector?.(selector))
+          .find(Boolean);
+        const schoolControl = directSchoolControl || [
+          '[id$="--school"]',
+          '[data-automation-id="searchBox"]',
+        ]
+          .map((selector) => row.querySelector?.(selector))
+          .find(Boolean);
+        const schoolVerified = directSchoolControl
+          ? setWorkdayText(directSchoolControl, entry.school)
+          : await setWorkdaySearchChoice(
+              schoolControl,
+              entry.school,
+              documentObject,
+            );
         const degreeVerified = await setWorkdayChoice(
           row.querySelector?.('[name="degree"]'),
           entry.degree,

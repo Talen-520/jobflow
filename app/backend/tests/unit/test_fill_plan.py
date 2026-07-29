@@ -316,6 +316,34 @@ def test_fill_plan_maps_workday_repeaters_from_structured_profile_data() -> None
     ]
 
 
+def test_workday_education_uses_saved_university_when_fact_school_is_empty() -> None:
+    form = FormSchema(
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="jobflow-workday-education",
+                label="Education",
+            )
+        ],
+    )
+    profile = UserProfile(
+        preferences={"university": "Queens College"},
+        education=[
+            Fact(
+                title="",
+                body="Computer Science",
+                degree="Bachelor's Degree",
+            )
+        ],
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    education = plan.items[0]
+    assert education.value[0]["school"] == "Queens College"
+    assert "profile.preferences.university" in education.source_refs
+
+
 def test_workday_repeat_plan_ignores_invalid_legacy_dates() -> None:
     form = FormSchema(
         ats="workday",
