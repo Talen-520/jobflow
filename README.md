@@ -30,11 +30,11 @@ is implemented and undergoing release QA:
   need manual input. A double-check completion icon appears only when every
   detected field on the current page is filled and browser-verified.
 - The extension preserves the user's normal Chrome session and automatically
-  reports supported Greenhouse, Ashby, Oracle, Workday, and Lever forms. JobFlow
+  reports supported Greenhouse, Ashby, Oracle, Workday, Lever, and Rippling forms. JobFlow
   does not launch a separate automation browser or reuse Chrome's profile directory.
 - Simplified main navigation for Dashboard, Profile, Applications, and Settings.
-- Generic and Lever form handling plus dedicated Greenhouse, Ashby, Oracle, and
-  Workday detection, extraction, locator normalization, fill behavior, and
+- Generic and Lever form handling plus dedicated Greenhouse, Ashby, Oracle,
+  Workday, and Rippling detection, extraction, locator normalization, fill behavior, and
   success-detection strategies.
 - Source-backed fill-plan services and safe fill execution.
 - Review-required and blocked fill-plan fields can be accepted, edited with
@@ -45,8 +45,9 @@ is implemented and undergoing release QA:
   Profile values without per-run review.
 - Source-backed resume/cover-letter upload planning that only uses existing
   local vault files.
-- Source-backed company, university, application-source, gender, race,
-  disability, and veteran mapping from exact saved Profile fields.
+- Source-backed company, university, application-source, pronouns, gender,
+  race, Hispanic/Latino, disability, and veteran mapping from exact saved
+  Profile fields.
 - AI use is limited to open questions such as motivation and company interest;
   answers require validated Profile or detected-form source references. A
   dedicated auto-saved **AI answer context** field lets the user provide
@@ -92,8 +93,9 @@ is implemented and undergoing release QA:
   fields, normalized country and state/province dropdowns, state-aware city
   suggestions with unrestricted city text entry and icon-triggered helper text,
   company, LinkedIn URL, GitHub URL, portfolio URL, US work authorization, visa
-  sponsorship, relocation choice, non-compete status, SMS consent, university, opportunity source,
-  gender, race, disability status, veteran status, AI answer context, and
+  sponsorship, relocation choice, non-compete status, SMS consent, university,
+  opportunity source, structured pronouns, gender, race, Hispanic/Latino, disability
+  status, veteran status, AI answer context, and
   structured repeatable work-experience, education, and certification records.
   Work Experience captures company, location, calendar-selected dates,
   current-role state, and description; Education captures school, degree, field
@@ -112,7 +114,7 @@ is implemented and undergoing release QA:
 The distributable, real-page validated desktop MVP milestone was completed and
 verified on July 12, 2026. Its release contract is:
 
-- Greenhouse, Ashby, Oracle Recruiting, and Workday each own dedicated form
+- Greenhouse, Ashby, Oracle Recruiting, Workday, and Rippling each own dedicated form
   extraction, stable field-location, fill, and success-detection logic. A
   dedicated adapter may reuse shared primitives, but it must not merely inherit
   the generic behavior unchanged.
@@ -153,8 +155,8 @@ Verification evidence:
 
 ## Current Extension Verification
 
-- Backend suite: `91 passed`.
-- Extension JavaScript syntax checks and `41` extension tests: passed.
+- Backend suite: `98 passed`.
+- Extension JavaScript syntax checks and `56` extension tests: passed.
 - Desktop Education suggestion test: passed.
 - Desktop TypeScript/Vite build and Rust `cargo check --locked`: passed.
 - Root smoke passed through a pairing-authenticated extension protocol
@@ -189,6 +191,13 @@ Verification evidence:
   multi-select. It submits the search with Enter, selects the matching
   `promptOption` radio, and reports success only after a `selectedItem` exists;
   typed search text and `0 items selected` are never accepted as filled.
+- Extension `0.8.33` adds Rippling production-host detection, stable Profile
+  field ids for generated React controls, location autocomplete, resume upload,
+  EEO/SMS choice mapping, semantic `aria-labelledby` extraction, and dedicated
+  backend fixture coverage. It waits for Rippling's resume parser to stabilize
+  before filling controlled identity fields and verifies values after rerenders.
+  Profile pronouns and Hispanic/Latino use explicit dropdown choices that match
+  Rippling's live options; JobFlow never infers either value.
 
 ## Quick Start
 
@@ -215,7 +224,7 @@ The development extension has no build step:
    the icon to open the same controls.
 
 Known ATS host permissions are limited to Greenhouse, Ashby, Oracle, Workday,
-and Lever. Generic forms outside those hosts are not automatically observed.
+Lever, and Rippling. Generic forms outside those hosts are not automatically observed.
 Backend connection and supported-form detection are automatic.
 The extension republishes its current detection state immediately after every
 WebSocket reconnect, so an already-open form does not wait for a heartbeat.

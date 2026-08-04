@@ -4,6 +4,7 @@ from pathlib import Path
 from app.adapters.ashby import AshbyAdapter
 from app.adapters.greenhouse import GreenhouseAdapter
 from app.adapters.oracle import OracleAdapter
+from app.adapters.rippling import RipplingAdapter
 from app.adapters.workday import WorkdayAdapter
 from app.models.schemas import FieldType
 
@@ -96,6 +97,47 @@ def test_workday_prefers_data_automation_ids_and_excludes_beecatcher() -> None:
         assert fields["password"].sensitive is True
         assert "beecatcher" not in fields
         assert form.job_title_hint == "Software Engineer"
+
+    asyncio.run(run())
+
+
+def test_rippling_normalizes_dynamic_fields_and_owns_success_policy() -> None:
+    async def run() -> None:
+        adapter = RipplingAdapter()
+        form = await adapter.extract_form(
+            FakePage(
+                "https://ats.rippling.com/rippling/jobs/example/apply?step=application",
+                fixture("rippling"),
+            )
+        )
+        fields = {field.field_id: field for field in form.fields}
+
+        assert {
+            "resume",
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "location",
+            "gender",
+            "race",
+            "hispanic_latino",
+            "veteran_status",
+            "disability_status",
+            "sms_opt_in",
+        } <= fields.keys()
+        assert fields["first_name"].selector == '[data-testid="input-first_name"]'
+        assert fields["location"].type == FieldType.select
+        assert fields["hispanic_latino"].sensitive is True
+
+        result = await adapter.detect_success(
+            FakePage(
+                "https://ats.rippling.com/rippling/jobs/example/application-submitted",
+                "<p>Your application has been submitted.</p>",
+            )
+        )
+        assert result.detected is True
+        assert any(signal.startswith("rippling:") for signal in result.signals)
 
     asyncio.run(run())
 

@@ -5,6 +5,7 @@ from app.adapters.greenhouse import GreenhouseAdapter
 from app.adapters.lever import LeverAdapter
 from app.adapters.oracle import OracleAdapter
 from app.adapters.registry import AdapterRegistry
+from app.adapters.rippling import RipplingAdapter
 from app.adapters.workday import WorkdayAdapter
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "GreenhouseAdapter",
     "LeverAdapter",
     "OracleAdapter",
+    "RipplingAdapter",
     "WorkdayAdapter",
 ]

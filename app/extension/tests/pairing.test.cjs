@@ -382,6 +382,7 @@ test("supported ATS pages receive automatic all-frame form detection", () => {
   assert.ok(detector.matches.includes("https://*.myworkdayjobs.com/*"));
   assert.ok(detector.matches.includes("https://*.oraclecloud.com/*"));
   assert.ok(detector.matches.includes("https://jobs.lever.co/*"));
+  assert.ok(detector.matches.includes("https://ats.rippling.com/*"));
 });
 
 test("extension startup restores the active supported application tab", () => {

@@ -103,6 +103,12 @@
       container: ".application-question, .application-field, fieldset, form",
       identity: ["name", "id"],
     },
+    rippling: {
+      hosts: ["ats.rippling.com"],
+      root: ["form", "main", "body"],
+      container: "fieldset, [class*='field'], form, main",
+      identity: ["data-testid", "name", "id"],
+    },
   };
 
   function clean(value) {
@@ -173,9 +179,7 @@
     return type === "button" && role !== "combobox" && popup !== "listbox";
   }
 
-  function labelFor(control, container, documentObject) {
-    const aria = clean(control.getAttribute("aria-label"));
-    if (aria) return aria;
+  function labelledByText(control, documentObject) {
     const labelledBy = clean(control.getAttribute("aria-labelledby"));
     if (labelledBy) {
       const text = labelledBy
@@ -185,6 +189,14 @@
         .join(" ");
       if (text) return text;
     }
+    return "";
+  }
+
+  function labelFor(control, container, documentObject) {
+    const aria = clean(control.getAttribute("aria-label"));
+    if (aria) return aria;
+    const labelledBy = labelledByText(control, documentObject);
+    if (labelledBy) return labelledBy;
     if (control.id) {
       const explicit = Array.from(documentObject.querySelectorAll("label")).find(
         (label) => label.htmlFor === control.id,
@@ -202,12 +214,102 @@
     );
   }
 
+  function ripplingLabelFor(control, container, documentObject) {
+    const labelledBy = labelledByText(control, documentObject);
+    if (labelledBy) return labelledBy;
+    const testId = clean(control.getAttribute("data-testid")).toLowerCase();
+    const labels = {
+      "input-resume": "Resume",
+      "input-first_name": "First name",
+      "input-last_name": "Last name",
+      "input-email": "Email",
+      "input-current_company": "Current company",
+      "input-phone_number": "Phone number",
+      "input-cover_letter": "Cover letter",
+    };
+    return labels[testId] || labelFor(control, container, documentObject);
+  }
+
+  function workdayQuestionContext(control) {
+    let candidate = control.parentElement;
+    for (let depth = 0; candidate && depth < 7; depth += 1) {
+      const listboxButtons = Array.from(
+        candidate.querySelectorAll?.(
+          "button[aria-haspopup='listbox'], [role='button'][aria-haspopup='listbox']",
+        ) || [],
+      );
+      if (listboxButtons.length === 1 && listboxButtons[0] === control) {
+        const question = Array.from(
+          candidate.querySelectorAll?.(
+            "p, label, legend, [data-automation-id^='formLabel'], [class*='question']",
+          ) || [],
+        )
+          .filter(
+            (node) =>
+              !control.contains?.(node) &&
+              !node.closest?.("button[aria-haspopup='listbox']"),
+          )
+          .map((node) => clean(node.textContent))
+          .find(
+            (text) =>
+              text &&
+              !/^(?:select one|required|\*)$/i.test(text) &&
+              !/^error\b/i.test(text),
+          );
+        if (question) {
+          return {
+            container: candidate,
+            label: question.replace(/\s*\*+\s*$/, ""),
+            required:
+              /\*\s*$/.test(question) ||
+              /\brequired\b/i.test(clean(control.getAttribute("aria-label"))) ||
+              control.getAttribute("aria-required") === "true" ||
+              Boolean(
+                candidate.querySelector?.(
+                  "[required], [aria-required='true']",
+                ),
+              ),
+          };
+        }
+      }
+      candidate = candidate.parentElement;
+    }
+    return null;
+  }
+
   function selectorFor(control, config, fieldId) {
     for (const attribute of config.identity || []) {
       const value = clean(control.getAttribute(attribute));
       if (value) return `[${attribute}="${escapeAttribute(value)}"]`;
     }
     return `[data-jobflow-field="${escapeAttribute(fieldId)}"]`;
+  }
+
+  function ripplingFieldId(control, label, fallback) {
+    const testId = clean(control.getAttribute("data-testid")).toLowerCase();
+    const normalizedLabel = clean(label).toLowerCase();
+    const testIdAliases = {
+      "input-resume": "resume",
+      "input-first_name": "first_name",
+      "input-last_name": "last_name",
+      "input-email": "email",
+      "input-current_company": "company",
+      "input-phone_number": "phone",
+      "input-cover_letter": "cover_letter",
+      "radio-sms_opt_in": "sms_opt_in",
+    };
+    if (testIdAliases[testId]) return testIdAliases[testId];
+    if (/^pronouns?\b/.test(normalizedLabel)) return "pronouns";
+    if (/\brace\b/.test(normalizedLabel)) return "race";
+    if (/hispanic|latino/.test(normalizedLabel)) return "hispanic_latino";
+    if (/\bgender\b/.test(normalizedLabel)) return "gender";
+    if (/\bveteran\b/.test(normalizedLabel)) return "veteran_status";
+    if (/\bdisability\b/.test(normalizedLabel)) return "disability_status";
+    if (/^location\b/.test(normalizedLabel)) return "location";
+    if (testId === "input-select-search-input" && normalizedLabel === "search") {
+      return "";
+    }
+    return fallback;
   }
 
   function ashbyRadioGroup(control, documentObject) {
@@ -240,7 +342,7 @@
   }
 
   function sensitiveField(text) {
-    return /(gender|race|ethnicity|veteran|disability|sponsorship|visa|authoriz|salary|compensation|relocation|birth|ssn)/i.test(
+    return /(gender|race|ethnicity|hispanic|latino|veteran|disability|sponsorship|visa|authoriz|salary|compensation|relocation|birth|ssn)/i.test(
       text,
     );
   }
@@ -309,11 +411,22 @@
     const heading = clean(documentObject.querySelector("h1, h2")?.textContent);
     let company = "";
     let jobTitle = heading;
+    if (ats === "rippling") {
+      const parts = pageTitle
+        .replace(/^apply\s+-\s+/i, "")
+        .split(" - ")
+        .map(clean)
+        .filter(Boolean);
+      if (parts.length >= 2) {
+        company = parts.pop() || "";
+        jobTitle = parts.join(" - ");
+      }
+    }
     const applicationMatch = pageTitle.match(/job application for\s+(.+?)\s+at\s+(.+)/i);
-    if (applicationMatch) {
+    if (!company && applicationMatch) {
       jobTitle ||= clean(applicationMatch[1]);
       company = clean(applicationMatch[2]);
-    } else if (pageTitle.includes(" - ")) {
+    } else if (!company && pageTitle.includes(" - ")) {
       const parts = pageTitle.split(" - ").map(clean).filter(Boolean);
       jobTitle ||= parts[0] || "";
       company = parts.slice(1).join(" - ");
@@ -419,14 +532,35 @@
         ats === "ashby" && type === "radio"
           ? ashbyRadioGroup(control, documentObject)
           : null;
-      const container = radioGroup?.container || control.closest(config.container);
+      const workdayQuestion =
+        ats === "workday" && type === "select"
+          ? workdayQuestionContext(control)
+          : null;
+      const container =
+        radioGroup?.container ||
+        workdayQuestion?.container ||
+        control.closest(config.container);
       const rawId =
         radioGroup?.fieldId ||
         (config.identity || []).map((attr) => clean(control.getAttribute(attr))).find(Boolean) ||
         `field_${index}`;
-      const fieldId = (config.aliases && config.aliases[rawId]) || rawId;
-      const label = radioGroup?.label || labelFor(control, container, documentObject);
+      const label =
+        radioGroup?.label ||
+        workdayQuestion?.label ||
+        (ats === "rippling"
+          ? ripplingLabelFor(control, container, documentObject)
+          : labelFor(control, container, documentObject)) ||
+        (ats === "rippling" && rawId === "input-resume" ? "Resume" : "");
+      const aliasedId = (config.aliases && config.aliases[rawId]) || rawId;
+      const fieldId =
+        ats === "rippling"
+          ? ripplingFieldId(control, label, aliasedId)
+          : aliasedId;
       if (!label || fieldId.startsWith("field_")) return;
+      if (!fieldId) return;
+      if (ats === "rippling") {
+        control.setAttribute("data-jobflow-field", fieldId);
+      }
       const options =
         radioGroup?.options ||
         (type === "select"
@@ -449,12 +583,22 @@
         label,
         type,
         required:
-          Boolean(control.required) || control.getAttribute("aria-required") === "true",
+          Boolean(workdayQuestion?.required) ||
+          Boolean(control.required) ||
+          control.getAttribute("aria-required") === "true",
         options,
         placeholder: clean(control.getAttribute("placeholder")),
         helper_text: clean(control.getAttribute("title")),
-        selector: radioGroup?.selector || selectorFor(control, config, fieldId),
-        sensitive: sensitiveField(`${fieldId} ${label}`),
+        selector:
+          radioGroup?.selector ||
+          (ats === "rippling"
+            ? `[data-jobflow-field="${escapeAttribute(fieldId)}"]`
+            : selectorFor(control, config, fieldId)),
+        sensitive: sensitiveField(
+          ats === "workday" && clean(label).toLowerCase() === "language"
+            ? label
+            : `${fieldId} ${label}`,
+        ),
       };
       byId.set(fieldId, field);
       fields.push(field);
@@ -631,8 +775,17 @@
   }
 
   function choiceTextMatches(actualValue, expectedValue) {
-    const actual = clean(actualValue).toLowerCase();
-    const expected = clean(expectedValue).toLowerCase();
+    const normalizeContractions = (value) =>
+      clean(value)
+        .toLowerCase()
+        .replace(/[’]/g, "'")
+        .replace(/\bdon't\b/g, "do not")
+        .replace(/\bdoesn't\b/g, "does not")
+        .replace(/\bdidn't\b/g, "did not")
+        .replace(/\bcan't\b/g, "cannot")
+        .replace(/\bwon't\b/g, "will not");
+    const actual = normalizeContractions(actualValue);
+    const expected = normalizeContractions(expectedValue);
     if (actual === expected) return true;
     if (!expected || !actual.startsWith(expected)) return false;
     return /^\s*[\(\[\{,;:/-]/.test(actual.slice(expected.length));
@@ -762,6 +915,37 @@
   function waitForChoiceState(documentObject, delay = 80) {
     const schedule = documentObject?.defaultView?.setTimeout || setTimeout;
     return new Promise((resolve) => schedule(resolve, delay));
+  }
+
+  async function waitForRipplingResumeProcessing(
+    documentObject,
+    {
+      initialDelay = 2200,
+      pollDelay = 250,
+      stableSamples = 2,
+      maxAttempts = 12,
+    } = {},
+  ) {
+    await waitForChoiceState(documentObject, initialDelay);
+    let previous = null;
+    let stable = 0;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await waitForChoiceState(documentObject, pollDelay);
+      const busy = /(?:uploading|processing|parsing)\s+(?:resume|résumé)/i.test(
+        clean(documentObject.body?.textContent),
+      );
+      const signature = Array.from(
+        documentObject.querySelectorAll(
+          '[data-jobflow-field]:not([type="file"])',
+        ),
+      )
+        .map((control) => clean(control.value || control.textContent))
+        .join("\u001f");
+      if (!busy && signature === previous) stable += 1;
+      else stable = 0;
+      if (stable >= stableSamples) return;
+      previous = signature;
+    }
   }
 
   function openChoiceMenu(element, documentObject) {
@@ -1406,13 +1590,38 @@
     const element = elements[0];
     if (item.action === "fill") {
       const expected = item.value == null ? "" : String(item.value);
+      const automationId = clean(
+        element.getAttribute?.("data-automation-id"),
+      );
+      if (
+        /^dateSection(?:Month|Day|Year)-input$/.test(automationId)
+      ) {
+        if (!setWorkdayNumericText(element, expected)) return false;
+        await waitForChoiceState(documentObject);
+        const refreshed =
+          Array.from(documentObject.querySelectorAll(selector))[0] || element;
+        return Number(refreshed.value) === Number(expected);
+      }
       setNativeValue(element, expected);
-      return textValueMatches(element.value, expected);
+      await waitForChoiceState(documentObject);
+      const refreshed =
+        Array.from(documentObject.querySelectorAll(selector))[0] || element;
+      return textValueMatches(refreshed.value, expected);
     }
     if (item.action === "check") {
-      element.checked = boolValue(item.value);
-      dispatchInput(element);
-      return element.checked === boolValue(item.value);
+      const expected = boolValue(item.value);
+      if (element.checked !== expected) {
+        if (typeof element.click === "function") {
+          element.click();
+        } else {
+          element.checked = expected;
+          dispatchInput(element);
+        }
+        await waitForChoiceState(documentObject);
+      }
+      const refreshed =
+        Array.from(documentObject.querySelectorAll(selector))[0] || element;
+      return refreshed.checked === expected;
     }
     if (item.action === "select" && field?.type === "radio") {
       const expected = clean(item.value).toLowerCase();
@@ -1468,7 +1677,8 @@
       const expectedValues = choiceValueAliases(item.value);
       const searchableCombobox =
         element.tagName.toLowerCase() === "input" &&
-        clean(element.getAttribute("role")).toLowerCase() === "combobox";
+        (clean(element.getAttribute("role")).toLowerCase() === "combobox" ||
+          clean(element.getAttribute("aria-haspopup")).toLowerCase() === "listbox");
       const currentValue = searchableCombobox
         ? committedChoiceText(element)
         : clean(element.value || element.textContent);
@@ -1547,8 +1757,24 @@
         continue;
       }
       try {
-        const verified = await applyItem(item, fields.get(item.field_id), documentObject);
+        const field = fields.get(item.field_id);
+        const selector = item.selector || field?.selector;
+        const resumeElement =
+          form?.ats === "rippling" && item.field_id === "resume" && selector
+            ? Array.from(documentObject.querySelectorAll(selector))[0]
+            : null;
+        const resumeAlreadyPresent = resumeElement
+          ? uploadedResumePresent(resumeElement, documentObject)
+          : false;
+        const verified = await applyItem(item, field, documentObject);
         if (!verified) throw new Error("Browser value did not match after writing.");
+        if (
+          form?.ats === "rippling" &&
+          item.field_id === "resume" &&
+          !resumeAlreadyPresent
+        ) {
+          await waitForRipplingResumeProcessing(documentObject);
+        }
         const reviewReason = profileReviewReason(item);
         if (reviewReason) {
           result.items.push({
@@ -1598,6 +1824,7 @@
     recordHints,
     textValueMatches,
     waitForChoiceState,
+    waitForRipplingResumeProcessing,
     workdayRepeaterFields,
   };
   globalObject.JobFlowDOM = api;

@@ -100,6 +100,12 @@ def test_registry_selects_ashby_workday_and_oracle() -> None:
                 "tests/fixtures/oracle_application.html",
                 {"email", "linkedin", "resume", "legal-disclaimer-checkbox"},
             ),
+            (
+                "rippling",
+                "https://ats.rippling.com/rippling/jobs/example/apply?step=application",
+                "tests/fixtures/rippling_application.html",
+                {"first_name", "last_name", "email", "resume", "location"},
+            ),
         ]
         for ats, url, fixture, expected_ids in cases:
             html = Path(fixture).read_text()

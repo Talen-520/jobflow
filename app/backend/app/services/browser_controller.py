@@ -6,6 +6,7 @@ from app.adapters.ashby import AshbyAdapter
 from app.adapters.dedicated import DedicatedHTMLFormExtractionService
 from app.adapters.greenhouse import GreenhouseAdapter
 from app.adapters.oracle import OracleAdapter
+from app.adapters.rippling import RipplingAdapter
 from app.adapters.workday import WorkdayAdapter
 from app.models.schemas import (
     BrowserState,
@@ -22,7 +23,13 @@ from app.services.success_detection import SuccessDetectionService
 
 DEDICATED_CONFIGS = {
     adapter.config.name: adapter.config
-    for adapter in (GreenhouseAdapter, AshbyAdapter, OracleAdapter, WorkdayAdapter)
+    for adapter in (
+        GreenhouseAdapter,
+        AshbyAdapter,
+        OracleAdapter,
+        RipplingAdapter,
+        WorkdayAdapter,
+    )
 }
 
 

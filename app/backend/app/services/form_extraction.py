@@ -219,6 +219,8 @@ class FormExtractionService:
             return "workday"
         if "oraclecloud.com" in haystack or "taleo.net" in haystack or "oracle recruiting" in haystack:
             return "oracle"
+        if "ats.rippling.com" in haystack or "rippling" in haystack:
+            return "rippling"
         return "generic"
 
     def _extract_record_hints(self, title: str, heading: str) -> tuple[str, str]:

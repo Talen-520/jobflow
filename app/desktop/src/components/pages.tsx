@@ -146,6 +146,40 @@ const DEFAULT_BASE_URL_BY_PROVIDER: Partial<Record<Preferences["ai_provider"], s
   gemini: "https://generativelanguage.googleapis.com",
 };
 
+const LANGUAGE_OPTIONS: ModelOption[] = [
+  { value: "English", label: "English" },
+  { value: "Spanish", label: "Spanish" },
+  { value: "French", label: "French" },
+  { value: "German", label: "German" },
+  { value: "Chinese", label: "Chinese" },
+  { value: "Japanese", label: "Japanese" },
+  { value: "Korean", label: "Korean" },
+  { value: "Portuguese", label: "Portuguese" },
+  { value: "Arabic", label: "Arabic" },
+  { value: "Hindi", label: "Hindi" },
+];
+
+const PRONOUN_OPTIONS: ModelOption[] = [
+  { value: "She/her/hers", label: "She/her/hers" },
+  { value: "He/him/his", label: "He/him/his" },
+  { value: "They/them/theirs", label: "They/them/theirs" },
+  {
+    value: "She/her/hers, they/them/theirs",
+    label: "She/her/hers, they/them/theirs",
+  },
+  {
+    value: "He/him/his, they/them/theirs",
+    label: "He/him/his, they/them/theirs",
+  },
+  { value: "Just use my name", label: "Just use my name" },
+];
+
+const HISPANIC_LATINO_OPTIONS: ModelOption[] = [
+  { value: "Yes", label: "Yes" },
+  { value: "No", label: "No" },
+  { value: "Choose not to disclose", label: "Choose not to disclose" },
+];
+
 export function ProfilePage({
   backendOnline,
   onProfileUpdated,
@@ -475,14 +509,14 @@ export function ProfilePage({
             />
             <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Are you legally authorized to work in the US?"
+                label="Are you legally authorized to work in the United States?"
                 value={profile.work_authorization.authorized}
                 onChange={(value) => updateWorkAuthorization("authorized", value)}
               />
             </div>
             <div className="col-span-2 max-[760px]:col-span-1">
               <NullableBooleanSelect
-                label="Will you now or in the future require visa sponsorship to work in the US?"
+                label="Will you now or in the future require sponsorship for employment visa status (e.g. H-1B visa status)?"
                 value={profile.work_authorization.requires_sponsorship}
                 onChange={(value) =>
                   updateWorkAuthorization("requires_sponsorship", value)
@@ -521,6 +555,24 @@ export function ProfilePage({
               label="Please tell us how you heard about this opportunity."
               value={profilePreference(profile, "heard_about_opportunity")}
               onChange={(value) => updatePreference("heard_about_opportunity", value)}
+            />
+            <ProfileSelect
+              label="Language"
+              value={profilePreference(profile, "language")}
+              options={[
+                { value: "", label: "Select language" },
+                ...LANGUAGE_OPTIONS,
+              ]}
+              onChange={(value) => updatePreference("language", value)}
+            />
+            <ProfileSelect
+              label="Pronouns"
+              value={profilePreference(profile, "pronouns")}
+              options={[
+                { value: "", label: "Prefer not set" },
+                ...PRONOUN_OPTIONS,
+              ]}
+              onChange={(value) => updatePreference("pronouns", value)}
             />
             <ProfileSelect
               label="Gender"
@@ -564,6 +616,15 @@ export function ProfilePage({
                 },
               ]}
               onChange={(value) => updatePreference("race", value)}
+            />
+            <ProfileSelect
+              label="Are you Hispanic/Latino?"
+              value={profilePreference(profile, "hispanic_latino")}
+              options={[
+                { value: "", label: "Prefer not set" },
+                ...HISPANIC_LATINO_OPTIONS,
+              ]}
+              onChange={(value) => updatePreference("hispanic_latino", value)}
             />
             <ProfileSelect
               label="Disability status"

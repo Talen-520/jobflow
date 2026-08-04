@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -55,6 +57,9 @@ SENSITIVE_TERMS = [
 
 
 class FillPlanService:
+    def __init__(self, today_provider: Callable[[], date] = date.today) -> None:
+        self._today_provider = today_provider
+
     def create_plan(
         self, form: FormSchema, profile: UserProfile, preferences: Preferences
     ) -> FillPlan:
@@ -76,6 +81,33 @@ class FillPlanService:
         form_url: str,
     ) -> FillPlanItem | BlockedItem:
         label = self._field_text(field)
+        if field.label.strip().lower() == "language":
+            language = tools.get_profile_field("preferences.language")
+            if language:
+                return self._item(
+                    field,
+                    language,
+                    "Exact language saved in Profile.",
+                )
+            if field.required:
+                return self._missing_fact_item(field, preferences)
+            return self._optional_missing_fact_item(field, preferences)
+        date_parts = {
+            "dateSectionMonth-input": lambda value: str(value.month),
+            "dateSectionDay-input": lambda value: str(value.day),
+            "dateSectionYear-input": lambda value: str(value.year),
+        }
+        if field.field_id in date_parts:
+            current_date = self._today_provider()
+            return self._item(
+                field,
+                ToolResult(
+                    value=date_parts[field.field_id](current_date),
+                    source_ref="system.current_date",
+                    confidence=1.0,
+                ),
+                "Current local date for form completion.",
+            )
         workday_repeater = self._map_workday_repeater(field, tools, label)
         if workday_repeater:
             return workday_repeater
@@ -326,6 +358,12 @@ class FillPlanService:
     ) -> FillPlanItem | None:
         rules = [
             (
+                r"\bpronouns?\b",
+                "preferences.pronouns",
+                "Mapped from saved Profile pronouns.",
+                False,
+            ),
+            (
                 r"\bhow\s+did\s+you(?:\s+\w+){0,3}\s+hear\b"
                 r"|\bheard\s+about\b|\bsource\b|\breferral\b",
                 "preferences.heard_about_opportunity",
@@ -352,7 +390,9 @@ class FillPlanService:
                 False,
             ),
             (
-                r"\bsms\b|\btext\s+message\b|\bphone[\s-]?sms[\s-]?opt[\s-]?in\b",
+                r"\bsms(?:[\s_-]?opt[\s_-]?in)?\b"
+                r"|\btext\s+messages?\b"
+                r"|\bphone[\s_-]?sms[\s_-]?opt[\s_-]?in\b",
                 "preferences.sms_opt_in",
                 "Mapped from saved SMS notification consent.",
                 False,
@@ -458,6 +498,10 @@ class FillPlanService:
             result = tools.get_profile_field("preferences.gender")
             if result:
                 return self._item(field, result, "Exact EEO value saved in Profile.")
+        if "hispanic" in label or "latino" in label:
+            result = tools.get_profile_field("preferences.hispanic_latino")
+            if result:
+                return self._item(field, result, "Exact EEO value saved in Profile.")
         if "race" in label or "ethnicity" in label:
             result = tools.get_profile_field("preferences.race")
             if result:
@@ -465,12 +509,41 @@ class FillPlanService:
         if "disability" in label:
             result = tools.get_profile_field("preferences.disability_status")
             if result:
+                if field.type == FieldType.checkbox:
+                    saved_choice = self._disability_choice(result.value)
+                    field_choice = self._disability_choice(field.label)
+                    if saved_choice and field_choice:
+                        result = ToolResult(
+                            value=str(saved_choice == field_choice),
+                            source_ref=result.source_ref,
+                            confidence=result.confidence,
+                        )
                 return self._item(field, result, "Exact EEO value saved in Profile.")
         if "veteran" in label:
             result = tools.get_profile_field("preferences.veteran_status")
             if result:
                 return self._item(field, result, "Exact EEO value saved in Profile.")
         return None
+
+    def _disability_choice(self, value: str) -> str:
+        normalized = " ".join(str(value).strip().lower().split())
+        if any(
+            phrase in normalized
+            for phrase in [
+                "do not want to answer",
+                "do not wish to answer",
+                "don't want to answer",
+                "don't wish to answer",
+                "decline to",
+                "prefer not to",
+            ]
+        ):
+            return "decline"
+        if re.match(r"^yes\b", normalized):
+            return "yes"
+        if re.match(r"^no\b", normalized):
+            return "no"
+        return ""
 
     def _map_preference_policy_field(
         self,
@@ -779,7 +852,15 @@ class FillPlanService:
     def _is_eeo(self, text: str) -> bool:
         return any(
             term in text
-            for term in ["gender", "race", "ethnicity", "veteran", "disability"]
+            for term in [
+                "gender",
+                "race",
+                "ethnicity",
+                "hispanic",
+                "latino",
+                "veteran",
+                "disability",
+            ]
         )
 
     def _is_open_question(self, text: str) -> bool:

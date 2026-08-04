@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 from app.models.schemas import (
@@ -430,6 +431,18 @@ def test_saved_compliance_choices_fill_workday_application_questions() -> None:
                 sensitive=True,
             ),
             FormField(
+                field_id="sponsorship",
+                label=(
+                    "Will you now or in the future require sponsorship for "
+                    "employment visa status (e.g. H-1B visa status)?"
+                ),
+                type=FieldType.select,
+                required=True,
+                options=["Select One", "Yes", "No"],
+                selector="#sponsorship",
+                sensitive=True,
+            ),
+            FormField(
                 field_id="relocation",
                 label="Would you consider relocating for this role?",
                 type=FieldType.select,
@@ -456,7 +469,11 @@ def test_saved_compliance_choices_fill_workday_application_questions() -> None:
         ],
     )
     profile = UserProfile(
-        work_authorization={"country": "US", "authorized": True},
+        work_authorization={
+            "country": "US",
+            "authorized": True,
+            "requires_sponsorship": False,
+        },
         preferences={
             "relocation": True,
             "non_compete_restrictions": False,
@@ -469,12 +486,14 @@ def test_saved_compliance_choices_fill_workday_application_questions() -> None:
     values = {item.field_id: item.value for item in plan.items}
     assert values == {
         "authorized": "Yes",
+        "sponsorship": "No",
         "relocation": "Yes, I would consider relocating for this role",
         "non-compete": "No",
     }
     source_refs = {item.field_id: item.source_refs for item in plan.items}
     assert source_refs == {
         "authorized": ["profile.work_authorization.authorized"],
+        "sponsorship": ["profile.work_authorization.requires_sponsorship"],
         "relocation": ["profile.preferences.relocation"],
         "non-compete": ["profile.preferences.non_compete_restrictions"],
     }
@@ -618,6 +637,64 @@ def test_profile_preferences_fill_common_application_fields() -> None:
     assert source_refs["company"] == ["profile.preferences.company"]
     assert source_refs["university"] == ["profile.preferences.university"]
     assert source_refs["source"] == ["profile.preferences.heard_about_opportunity"]
+
+
+def test_rippling_profile_choices_map_without_inventing_answers() -> None:
+    fields = [
+        ("pronouns", "Pronouns", False),
+        ("gender", "Gender", True),
+        ("race", "Please identify your race", True),
+        ("hispanic_latino", "Are you Hispanic/Latino?", True),
+        ("veteran_status", "Veteran Status", True),
+        ("disability_status", "Disability Status", True),
+        (
+            "sms_opt_in",
+            "Yes - I consent to receiving text messages",
+            False,
+        ),
+    ]
+    form = FormSchema(
+        url="https://ats.rippling.com/rippling/jobs/example/apply?step=application",
+        ats="rippling",
+        fields=[
+            FormField(
+                field_id=field_id,
+                label=label,
+                type=FieldType.radio if field_id == "sms_opt_in" else FieldType.select,
+                required=True,
+                options=["Yes", "No"] if field_id == "sms_opt_in" else [],
+                selector=f'[data-jobflow-field="{field_id}"]',
+                sensitive=sensitive,
+            )
+            for field_id, label, sensitive in fields
+        ],
+    )
+    profile = UserProfile(
+        preferences={
+            "pronouns": "He/him/his",
+            "gender": "Male",
+            "race": "Asian",
+            "hispanic_latino": "No",
+            "veteran_status": "I am not a protected veteran",
+            "disability_status": "No, I do not have a disability",
+            "sms_opt_in": False,
+        }
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    values = {item.field_id: item.value for item in plan.items}
+    assert values == {
+        "pronouns": "He/him/his",
+        "gender": "Male",
+        "race": "Asian",
+        "hispanic_latino": "No",
+        "veteran_status": "I am not a protected veteran",
+        "disability_status": "No, I do not have a disability",
+        "sms_opt_in": "No",
+    }
+    assert all(item.source_refs for item in plan.items)
 
 
 def test_greenhouse_source_and_optional_cover_letter_are_handled_safely() -> None:
@@ -836,6 +913,107 @@ def test_eeo_profile_value_maps_to_one_descriptive_radio_option() -> None:
 
     assert plan.blocked_items == []
     assert plan.items[0].value == "Asian (Not Hispanic or Latino)"
+
+
+def test_workday_language_ignores_disability_in_control_id() -> None:
+    form = FormSchema(
+        url="https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/example/apply",
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="disabilityForm",
+                label="Language",
+                type=FieldType.select,
+                required=True,
+                selector='[name="disabilityForm"]',
+                sensitive=True,
+            )
+        ],
+    )
+    profile = UserProfile(
+        preferences={
+            "language": "English",
+            "disability_status": "No, I do not have a disability",
+        }
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    assert plan.items[0].value == "English"
+    assert plan.items[0].source_refs == ["profile.preferences.language"]
+
+
+def test_workday_self_identify_date_defaults_to_current_date() -> None:
+    form = FormSchema(
+        url="https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/example/apply",
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="dateSectionMonth-input",
+                label="Month",
+                type=FieldType.text,
+                selector='[data-automation-id="dateSectionMonth-input"]',
+            ),
+            FormField(
+                field_id="dateSectionDay-input",
+                label="Day",
+                type=FieldType.text,
+                selector='[data-automation-id="dateSectionDay-input"]',
+            ),
+            FormField(
+                field_id="dateSectionYear-input",
+                label="Year",
+                type=FieldType.text,
+                selector='[data-automation-id="dateSectionYear-input"]',
+            ),
+        ],
+    )
+
+    plan = FillPlanService(
+        today_provider=lambda: date(2026, 7, 29)
+    ).create_plan(form, UserProfile(), Preferences())
+
+    assert [item.value for item in plan.items] == ["7", "29", "2026"]
+    assert all(item.source_refs == ["system.current_date"] for item in plan.items)
+
+
+def test_workday_disability_checkboxes_select_only_saved_profile_choice() -> None:
+    labels = [
+        "Yes, I have a disability, or have had one in the past",
+        "No, I do not have a disability and have not had one in the past",
+        "I do not want to answer",
+    ]
+    form = FormSchema(
+        url="https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/example/apply",
+        ats="workday",
+        fields=[
+            FormField(
+                field_id="disabilityStatus",
+                label=label,
+                type=FieldType.checkbox,
+                required=True,
+                selector=f'[data-jobflow-option="{index}"]',
+                sensitive=True,
+            )
+            for index, label in enumerate(labels)
+        ],
+    )
+    profile = UserProfile(
+        preferences={
+            "disability_status": "No, I do not have a disability",
+        }
+    )
+
+    plan = FillPlanService().create_plan(form, profile, Preferences())
+
+    assert plan.blocked_items == []
+    assert [item.action for item in plan.items] == ["check", "check", "check"]
+    assert [item.value for item in plan.items] == [False, True, False]
+    assert all(
+        item.source_refs == ["profile.preferences.disability_status"]
+        for item in plan.items
+    )
 
 
 def test_missing_fact_policy_can_leave_required_field_blank() -> None:

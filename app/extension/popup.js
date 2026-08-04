@@ -17,6 +17,7 @@ function atsLabel(value) {
     greenhouse: "Greenhouse",
     lever: "Lever",
     oracle: "Oracle",
+    rippling: "Rippling",
     workday: "Workday",
     generic: "Application",
   };

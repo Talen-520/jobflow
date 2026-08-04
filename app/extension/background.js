@@ -8,6 +8,7 @@ const SUPPORTED_HOSTS = [
   "oraclecloud.com",
   "taleo.net",
   "jobs.lever.co",
+  "ats.rippling.com",
 ];
 
 let socket = null;

@@ -10,14 +10,246 @@ const {
   choiceValueAliases,
   ashbyRadioGroup,
   decodeDocumentPayload,
+  detectAts,
   eligiblePlanItems,
   extractForm,
   ignoredNativeControlType,
   recordHints,
   textValueMatches,
   waitForChoiceState,
+  waitForRipplingResumeProcessing,
   workdayRepeaterFields,
 } = require("../jobflow-dom.js");
+
+test("Rippling application URLs select the dedicated ATS mapping", () => {
+  const documentObject = {
+    documentElement: { innerHTML: "" },
+  };
+
+  assert.equal(
+    detectAts(
+      "https://ats.rippling.com/rippling/jobs/example/apply?step=application",
+      documentObject,
+    ),
+    "rippling",
+  );
+});
+
+test("Rippling extraction normalizes dynamic controls to stable Profile fields", () => {
+  const labels = [];
+  const controls = [];
+  const addControl = (tagName, attributes, label) => {
+    const current = { ...attributes };
+    const control = {
+      id: attributes.id || "",
+      name: attributes.name || "",
+      tagName,
+      disabled: false,
+      required: Boolean(attributes.required),
+      value: attributes.value || "",
+      getAttribute(name) {
+        return current[name] ?? "";
+      },
+      setAttribute(name, value) {
+        current[name] = value;
+      },
+      closest() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    controls.push(control);
+    if (label && control.id) {
+      labels.push({ htmlFor: control.id, textContent: label });
+    }
+    return control;
+  };
+
+  addControl("INPUT", { type: "file", "data-testid": "input-resume" }, "Resume");
+  addControl(
+    "INPUT",
+    { id: "field-12", name: "generated-first", type: "text", "data-testid": "input-first_name", required: "" },
+    "First name",
+  );
+  addControl(
+    "INPUT",
+    { id: "field-16", name: "generated-last", type: "text", "data-testid": "input-last_name" },
+    "Last name",
+  );
+  addControl(
+    "INPUT",
+    { id: "field-20", name: "generated-email", type: "email", "data-testid": "input-email" },
+    "Email",
+  );
+  addControl(
+    "INPUT",
+    { id: "field-35", name: "generated-phone", type: "tel", "data-testid": "input-phone_number" },
+    "Phone number",
+  );
+  addControl(
+    "INPUT",
+    { id: "field-46", type: "text", "data-testid": "input-undefined", "aria-haspopup": "listbox" },
+    "Location",
+  );
+  addControl("DIV", { id: "field-59", role: "combobox" }, "Gender");
+  addControl(
+    "INPUT",
+    { id: "field-65", role: "combobox", "data-testid": "input-select-search-input" },
+    "Please identify your race",
+  );
+  addControl("DIV", { id: "field-72", role: "combobox" }, "Are you Hispanic/Latino?");
+  addControl("DIV", { id: "field-78", role: "combobox" }, "Veteran Status");
+  addControl("DIV", { id: "field-84", role: "combobox" }, "Disability Status");
+  addControl(
+    "INPUT",
+    { id: "sms-yes", name: "sms_opt_in", type: "radio", value: "true", "data-testid": "radio-sms_opt_in" },
+    "Yes - I consent to receive SMS updates",
+  );
+  addControl(
+    "INPUT",
+    { id: "sms-no", name: "sms_opt_in", type: "radio", value: "false", "data-testid": "radio-sms_opt_in" },
+    "No - I do not consent to receive SMS updates",
+  );
+
+  const root = {
+    querySelectorAll(selector) {
+      return selector.startsWith("input, textarea") ? controls : [];
+    },
+  };
+  const documentObject = {
+    title: "Apply - Software Engineer II, Backend - Rippling AI",
+    documentElement: { innerHTML: "" },
+    getElementById() {
+      return null;
+    },
+    querySelector(selector) {
+      if (selector === "form") return root;
+      if (selector === "h1, h2") return { textContent: "Software Engineer II, Backend" };
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === "label" ? labels : [];
+    },
+  };
+
+  const form = extractForm(
+    documentObject,
+    "https://ats.rippling.com/rippling/jobs/example/apply?step=application",
+  );
+  const fields = Object.fromEntries(form.fields.map((field) => [field.field_id, field]));
+
+  assert.deepEqual(
+    Object.keys(fields),
+    [
+      "resume",
+      "first_name",
+      "last_name",
+      "email",
+      "phone",
+      "location",
+      "gender",
+      "race",
+      "hispanic_latino",
+      "veteran_status",
+      "disability_status",
+      "sms_opt_in",
+    ],
+  );
+  assert.equal(fields.location.type, "select");
+  assert.deepEqual(fields.sms_opt_in.options, ["true", "false"]);
+  assert.equal(fields.gender.selector, '[data-jobflow-field="gender"]');
+  assert.equal(fields.hispanic_latino.sensitive, true);
+});
+
+test("Rippling prefers semantic aria-labelledby text over generic control labels", () => {
+  const labelsById = {
+    "field-42-label": { textContent: "Location" },
+    "field-55-label": { textContent: "Gender" },
+  };
+  const controls = [
+    {
+      id: "field-42",
+      name: "generated-location",
+      tagName: "INPUT",
+      disabled: false,
+      required: true,
+      getAttribute(name) {
+        return {
+          type: "text",
+          "data-testid": "input-undefined",
+          "aria-label": "textbox",
+          "aria-labelledby": "field-42-label",
+          "aria-haspopup": "listbox",
+        }[name] || "";
+      },
+      setAttribute() {},
+      closest() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    {
+      id: "field-55",
+      name: "",
+      tagName: "DIV",
+      disabled: false,
+      required: false,
+      getAttribute(name) {
+        return {
+          role: "combobox",
+          "aria-label": "Select...",
+          "aria-labelledby": "field-55-label",
+          "aria-haspopup": "listbox",
+        }[name] || "";
+      },
+      setAttribute() {},
+      closest() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+  ];
+  const root = {
+    querySelectorAll(selector) {
+      return selector.startsWith("input, textarea") ? controls : [];
+    },
+  };
+  const documentObject = {
+    title: "Apply - Software Engineer II, Backend - Rippling AI",
+    documentElement: { innerHTML: "" },
+    getElementById(id) {
+      return labelsById[id] || null;
+    },
+    querySelector(selector) {
+      if (selector === "form") return root;
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const form = extractForm(
+    documentObject,
+    "https://ats.rippling.com/rippling/jobs/example/apply?step=application",
+  );
+
+  assert.deepEqual(
+    form.fields.map((field) => [field.field_id, field.label]),
+    [
+      ["location", "Location"],
+      ["gender", "Gender"],
+    ],
+  );
+  assert.equal(form.company_name_hint, "Rippling AI");
+  assert.equal(form.job_title_hint, "Software Engineer II, Backend");
+});
 
 test("Ashby radios use the stable question path and all option labels", () => {
   const controls = ["Male", "Female", "Decline to self-identify"].map(
@@ -150,6 +382,16 @@ test("descriptive radio labels accept a unique saved-value prefix", () => {
   );
 });
 
+test("Rippling choice matching treats common contractions as equivalent", () => {
+  assert.equal(
+    choiceTextMatches(
+      "No, I don't have a disability",
+      "No, I do not have a disability",
+    ),
+    true,
+  );
+});
+
 test("custom combobox values accept boolean Yes and No aliases", () => {
   assert.deepEqual(choiceValueAliases("True"), ["yes", "true"]);
   assert.deepEqual(choiceValueAliases("false"), ["no", "false"]);
@@ -194,6 +436,130 @@ test("Workday listbox buttons are retained while ordinary buttons are ignored", 
   );
   assert.equal(ignoredNativeControlType(control({ type: "button" })), true);
   assert.equal(ignoredNativeControlType(control({ type: "submit" })), true);
+});
+
+test("Workday listbox fields use their question text instead of the button label", () => {
+  const questionText = {
+    textContent:
+      "Are you authorized to work in the country where this job is located?*",
+  };
+  const questionContainer = {
+    textContent:
+      "Are you authorized to work in the country where this job is located?* Select One Required",
+    parentElement: null,
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector.includes("aria-haspopup='listbox'")) return [control];
+      if (selector.includes("p, label, legend")) return [questionText];
+      return [];
+    },
+  };
+  const control = {
+    id: "",
+    name: "work-authorization",
+    tagName: "BUTTON",
+    disabled: false,
+    parentElement: questionContainer,
+    getAttribute(name) {
+      return {
+        type: "button",
+        "aria-haspopup": "listbox",
+        "aria-label": "Select One Required",
+        name: "work-authorization",
+      }[name] || "";
+    },
+    closest() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const root = {
+    querySelectorAll(selector) {
+      if (selector.includes("h1, h2, h3")) return [];
+      if (selector.includes("input, textarea, select")) return [control];
+      return [];
+    },
+  };
+  const documentObject = {
+    title: "Example Workday application",
+    documentElement: { innerHTML: "" },
+    getElementById() {
+      return null;
+    },
+    querySelector(selector) {
+      return selector === "main" ? root : null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const form = extractForm(
+    documentObject,
+    "https://example.myworkdayjobs.com/en-US/Example/job/USA.NY/example/apply",
+  );
+
+  assert.equal(form.fields.length, 1);
+  assert.equal(
+    form.fields[0].label,
+    "Are you authorized to work in the country where this job is located?",
+  );
+  assert.equal(form.fields[0].required, true);
+  assert.equal(form.fields[0].sensitive, true);
+});
+
+test("Workday Language is not sensitive because of its disabilityForm control name", () => {
+  const control = {
+    id: "",
+    name: "disabilityForm",
+    tagName: "SELECT",
+    disabled: false,
+    required: true,
+    value: "English",
+    getAttribute(name) {
+      return {
+        name: "disabilityForm",
+        "aria-label": "Language",
+      }[name] || "";
+    },
+    closest() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const root = {
+    querySelectorAll(selector) {
+      if (selector.includes("h1, h2, h3")) return [];
+      if (selector.includes("input, textarea, select")) return [control];
+      return [];
+    },
+  };
+  const documentObject = {
+    title: "Example Workday application",
+    documentElement: { innerHTML: "" },
+    querySelector(selector) {
+      return selector === "main" ? root : null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  const form = extractForm(
+    documentObject,
+    "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/example/apply",
+  );
+
+  assert.equal(form.fields.length, 1);
+  assert.equal(form.fields[0].field_id, "disabilityForm");
+  assert.equal(form.fields[0].label, "Language");
+  assert.equal(form.fields[0].sensitive, false);
 });
 
 test("Workday state choices accept US postal abbreviations", () => {
@@ -370,6 +736,70 @@ test("custom combobox waits for and selects one descriptive location option", as
 
   assert.equal(optionClicked, true);
   assert.equal(result.filled_count, 1);
+  assert.equal(result.error_count, 0);
+});
+
+test("Rippling location autocomplete types before reading listbox options", async () => {
+  let optionClicked = false;
+  const option = {
+    textContent: "New York, NY, United States",
+    click() {
+      optionClicked = true;
+    },
+  };
+  const locationInput = {
+    tagName: "INPUT",
+    textContent: "",
+    value: "",
+    dispatchEvent() {},
+    getAttribute(name) {
+      return name === "aria-haspopup" ? "listbox" : "";
+    },
+    click() {},
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '[data-jobflow-field="location"]') return [locationInput];
+      if (selector.includes('[role="option"]')) {
+        return locationInput.value === "New York" ? [option] : [];
+      }
+      return [];
+    },
+  };
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "location",
+          action: "select",
+          value: "New York",
+          confidence: 0.95,
+          needs_review: false,
+          source_refs: ["profile.identity.location"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "location",
+          type: "select",
+          selector: '[data-jobflow-field="location"]',
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(locationInput.value, "New York");
+  assert.equal(optionClicked, true);
   assert.equal(result.error_count, 0);
 });
 
@@ -685,6 +1115,38 @@ test("choice verification wait resolves without animation frames", async () => {
   assert.ok(Date.now() - startedAt < 100);
 });
 
+test("Rippling resume processing waits until controlled fields stabilize", async () => {
+  const samples = [
+    ["", ""],
+    ["Tao", ""],
+    ["Tao", ""],
+    ["Tao", ""],
+  ];
+  let sampleIndex = 0;
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: {
+      setTimeout(callback) {
+        callback();
+      },
+    },
+    querySelectorAll() {
+      const values = samples[Math.min(sampleIndex, samples.length - 1)];
+      sampleIndex += 1;
+      return values.map((value) => ({ value }));
+    },
+  };
+
+  await waitForRipplingResumeProcessing(documentObject, {
+    initialDelay: 0,
+    pollDelay: 0,
+    stableSamples: 2,
+    maxAttempts: 6,
+  });
+
+  assert.ok(sampleIndex >= 4);
+});
+
 test("document payload from the extension background decodes to bytes", () => {
   const decoded = decodeDocumentPayload({
     base64: Buffer.from("resume bytes").toString("base64"),
@@ -883,6 +1345,58 @@ test("text verification accepts formatted phone numbers and country codes", () =
   assert.equal(textValueMatches("(929) 421-5876", "9294215876"), true);
   assert.equal(textValueMatches("+1 929-421-5876", "9294215876"), true);
   assert.equal(textValueMatches("929-421-5000", "9294215876"), false);
+});
+
+test("text fields fail verification when a controlled rerender clears the value", async () => {
+  const input = {
+    tagName: "INPUT",
+    value: "",
+    ownerDocument: null,
+    getAttribute() {
+      return "";
+    },
+    dispatchEvent(event) {
+      if (event.type === "input") {
+        setTimeout(() => {
+          this.value = "";
+        }, 5);
+      }
+    },
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === "#email" ? [input] : [];
+    },
+  };
+  input.ownerDocument = documentObject;
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "email",
+          action: "fill",
+          value: "tao@example.com",
+          confidence: 0.95,
+          needs_review: false,
+          source_refs: ["profile.identity.email"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [{ field_id: "email", type: "text", selector: "#email" }],
+    },
+    documentObject,
+  );
+
+  assert.equal(result.filled_count, 0);
+  assert.equal(result.error_count, 1);
 });
 
 test("Ashby embedded application derives company from the frame URL", () => {
@@ -1171,6 +1685,205 @@ test("Workday repeat action waits for an asynchronously added row", async () => 
 
   assert.equal(verified, true);
   assert.equal(input.value, "https://example.dev");
+});
+
+test("standalone Workday date parts commit through the numeric input lifecycle", async () => {
+  const lifecycle = [];
+  const input = {
+    tagName: "INPUT",
+    value: "",
+    ownerDocument: null,
+    focus() {
+      lifecycle.push("focus");
+    },
+    blur() {
+      lifecycle.push("blur");
+    },
+    dispatchEvent(event) {
+      lifecycle.push(event.type);
+    },
+    getAttribute(name) {
+      return name === "data-automation-id"
+        ? "dateSectionMonth-input"
+        : "";
+    },
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === '[data-automation-id="dateSectionMonth-input"]'
+        ? [input]
+        : [];
+    },
+  };
+  input.ownerDocument = documentObject;
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "dateSectionMonth-input",
+          action: "fill",
+          value: "7",
+          confidence: 1,
+          needs_review: false,
+          selector: '[data-automation-id="dateSectionMonth-input"]',
+          source_refs: ["system.current_date"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "dateSectionMonth-input",
+          type: "text",
+          selector: '[data-automation-id="dateSectionMonth-input"]',
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(result.filled_count, 1);
+  assert.equal(result.error_count, 0);
+  assert.equal(input.value, "7");
+  assert.deepEqual(lifecycle, ["focus", "input", "change", "blur"]);
+});
+
+test("standalone Workday date parts wait for the controlled input rerender", async () => {
+  let activeInput = null;
+  const makeInput = (rerenders) => ({
+    tagName: "INPUT",
+    value: "",
+    ownerDocument: null,
+    focus() {},
+    dispatchEvent() {},
+    blur() {
+      if (!rerenders) return;
+      const replacement = makeInput(false);
+      replacement.ownerDocument = documentObject;
+      activeInput = replacement;
+      setTimeout(() => {
+        replacement.value = "7";
+      }, 20);
+    },
+    getAttribute(name) {
+      return name === "data-automation-id"
+        ? "dateSectionMonth-input"
+        : "";
+    },
+  });
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === '[data-automation-id="dateSectionMonth-input"]'
+        ? [activeInput]
+        : [];
+    },
+  };
+  activeInput = makeInput(true);
+  activeInput.ownerDocument = documentObject;
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "dateSectionMonth-input",
+          action: "fill",
+          value: "7",
+          confidence: 1,
+          needs_review: false,
+          selector: '[data-automation-id="dateSectionMonth-input"]',
+          source_refs: ["system.current_date"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "dateSectionMonth-input",
+          type: "text",
+          selector: '[data-automation-id="dateSectionMonth-input"]',
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(result.filled_count, 1);
+  assert.equal(result.error_count, 0);
+  assert.equal(activeInput.value, "7");
+});
+
+test("controlled Workday checkboxes use a real click to persist the choice", async () => {
+  let checked = false;
+  let clickCount = 0;
+  const checkbox = {
+    tagName: "INPUT",
+    get checked() {
+      return checked;
+    },
+    set checked(_value) {
+      // React-controlled Workday checkboxes ignore direct property assignment.
+    },
+    click() {
+      clickCount += 1;
+      checked = true;
+    },
+    dispatchEvent() {},
+  };
+  const documentObject = {
+    body: { textContent: "" },
+    defaultView: { setTimeout },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === "#disability-no" ? [checkbox] : [];
+    },
+  };
+
+  const result = await applyFillPlan(
+    {
+      items: [
+        {
+          field_id: "disability-no",
+          action: "check",
+          value: true,
+          confidence: 0.95,
+          needs_review: false,
+          selector: "#disability-no",
+          source_refs: ["profile.preferences.disability_status"],
+        },
+      ],
+      blocked_items: [],
+    },
+    {
+      fields: [
+        {
+          field_id: "disability-no",
+          type: "checkbox",
+          selector: "#disability-no",
+        },
+      ],
+    },
+    documentObject,
+  );
+
+  assert.equal(clickCount, 1);
+  assert.equal(checked, true);
+  assert.equal(result.filled_count, 1);
+  assert.equal(result.error_count, 0);
 });
 
 test("Workday repeat action resolves controls outside the row heading", async () => {
